@@ -309,6 +309,12 @@
   }
 
   // ---------- network lobby ----------
+  function ipKind(ip) {  // tells which address the other player should use
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 100 && b >= 64 && b < 128) return '(Tailscale)';
+    if (a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b < 32)) return '(réseau local)';
+    return '(autre réseau)';
+  }
   function Lobby() {
     let mode = null, info = null, status = '', ws = null;
     const BTN_HOST = [170, 150, 250, 40], BTN_JOIN = [170, 240, 250, 40], BTN_GO = [230, 375, 130, 36], BTN_BACK = [230, 520, 130, 32];
@@ -354,8 +360,8 @@
         btn(BTN_HOST, 'HÉBERGER'); btn(BTN_JOIN, 'REJOINDRE');
         if (mode === 'host') {
           R.text(ctx, "Donnez à l'autre joueur :", 300, 325, 17, { align: 'center', outline: false });
-          const ips = info ? info.ips.map((ip) => ip + ':' + info.port) : ['...'];
-          ips.slice(0, 3).forEach((s, i) => R.text(ctx, s, 300, 360 + i * 30, 24, { align: 'center', outline: false, color: '#ffd23a' }));
+          const ips = info ? info.ips.map((ip) => ip + ':' + info.port + '  ' + ipKind(ip)) : ['...'];
+          ips.slice(0, 3).forEach((s, i) => R.text(ctx, s, 300, 360 + i * 30, 22, { align: 'center', outline: false, color: '#ffd23a' }));
         }
         if (mode === 'join') {
           R.text(ctx, "Adresse de l'hôte (IP:port) :", 300, 318, 16, { align: 'center', outline: false });

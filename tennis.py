@@ -142,11 +142,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def websocket(self, role):
         key = self.headers['Sec-WebSocket-Key']
         accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
-        self.send_response(101)
-        self.send_header('Upgrade', 'websocket')
-        self.send_header('Connection', 'Upgrade')
-        self.send_header('Sec-WebSocket-Accept', accept)
-        self.end_headers()
+        # Written by hand: BaseHTTPRequestHandler would answer "HTTP/1.0 101", which Firefox
+        # rejects (RFC 6455 requires HTTP/1.1).
+        self.wfile.write(('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n'
+                          'Connection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n' % accept).encode())
         self.wfile.flush()
         self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         conn = WSConn(self.connection)

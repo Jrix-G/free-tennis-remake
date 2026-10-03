@@ -14,7 +14,8 @@ M coupe le son, Échap revient au menu. Souris : menus, barres de stats, choix d
 2. L'hôte clique sur **HÉBERGER**. Son IP:port s'affiche (aussi dans le terminal).
 3. L'autre clique sur **REJOINDRE**, tape l'IP:port de l'hôte puis OK. Il peut aussi ouvrir `http://IP_HÔTE:8000` dans un navigateur, sans rien installer.
 4. Le jeu marche en LAN sans configuration. Autorisez Python dans le pare-feu si le système le demande.
-   Pour Internet : utilisez Tailscale ou ZeroTier (puis l'IP du VPN), ou redirigez le port TCP 8000 de la box vers l'hôte.
+   Pas sur le même réseau (ou Wi-Fi d'école qui isole les machines) : installez Tailscale sur les deux PC, connectés au même compte
+   ou avec la machine partagée, puis utilisez l'IP marquée (Tailscale). Autre solution : rediriger le port TCP 8000 de la box vers l'hôte.
    Autre port : `./run.sh --port 8001`.
 
 L'hôte fait tourner la simulation autoritaire. L'invité envoie ses touches et reçoit 30 états par seconde, qu'il interpole avec prédiction de son propre déplacement.
