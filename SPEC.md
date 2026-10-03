@@ -127,11 +127,11 @@
    retenu jusqu'au tick suivant. Le comportement en maintien reste identique.
 7. **Aléatoire** : `Math.random` remplacé par un générateur à graine (mulberry32), pour que la logique
    soit déterministe.
-8. **Mode 2 joueurs** : l'hôte est le joueur du bas (P1) et l'invité celui du fond (P2), vu de son côté
+8. **Mode 2 joueurs (en ligne)** : le créateur de la partie est le joueur du bas (P1) et l'autre celui du fond (P2), vu de son côté
    (vue retournée). L'invité joue avec les règles « humaines » en miroir. Les comportements propres à l'IA
    (FREEZE, pose « win » quand la balle l'a dépassé) ne s'appliquent qu'à COM. Stats équilibrées (5) pour
-   les deux joueurs. Mode exhibition (pas d'applaudissements). Revanche avec Espace. Découverte LAN : l'hôte annonce sa partie par UDP
-   (multicast 239.255.41.234 + broadcast, port 41234, 1/s) ; REJOINDRE liste les parties entendues ; saisie d'IP en secours.
+   les deux joueurs. Mode exhibition (pas d'applaudissements). Revanche avec Espace. Le serveur simule le match ;
+   partie rapide (appariement) ou partie privée rejointe par code de 4 caractères ou lien `#CODE`.
 9. **Rendu** : la simulation reste à 30 Hz fixe. L'affichage suit requestAnimationFrame et interpole les
    positions entre deux ticks (affichage plus fluide, timings identiques).
 
