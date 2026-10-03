@@ -2,8 +2,7 @@
 
 Remake fidèle **non officiel** de « TENNIS GAME » (GAMEDESIGN), le jeu de freetennis.org. Projet de fan, sans lien avec GAMEDESIGN. La logique est portée ligne à ligne depuis l'ActionScript d'origine (voir `SPEC.md`).
 
-**Installation** : Python 3.8+ suffit, sans aucun paquet à installer.
-**Solo** : `./run.sh` (Linux/macOS) ou double-clic sur `run.bat` (Windows). Le navigateur s'ouvre sur http://localhost:8000.
+**Installation** : Python 3.8+ suffit, sans aucun paquet à installer. **Solo** : `./run.sh` (Linux/macOS) ou double-clic sur `run.bat` (Windows). Le navigateur s'ouvre sur http://localhost:8000.
 Choisissez EXHIBITION ou TOURNAMENT.
 
 **Contrôles** : flèches pour se déplacer, et au moment de la frappe pour viser. Espace pour frapper / servir / valider.
