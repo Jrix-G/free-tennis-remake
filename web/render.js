@@ -283,9 +283,13 @@
       const ok = pb && pb.visible && Math.abs(pb.vy - B.vy) < 80;
       const vx = ok ? lerp(pb.vx, B.vx) : B.vx, vy = ok ? lerp(pb.vy, B.vy) : B.vy, vh = ok ? lerp(pb.vh, B.vh) : B.vh;
       const qs = P(vx * s, vy * s), qb = P(vx * s, vy * s, vh);
-      ctx.fillStyle = '#000'; ctx.beginPath(); ctx.ellipse(qs.x, qs.y, 3.5 * qs.per, 2 * qs.per, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = '#ffe600'; ctx.strokeStyle = '#8a7a00'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(qb.x, qb.y, 3.3 * qb.per, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      // shadow: fixed size (the original never scales mcBallShadow)
+      ctx.fillStyle = '#000'; ctx.beginPath(); ctx.ellipse(qs.x, qs.y, 4.9, 3, 0, 0, Math.PI * 2); ctx.fill();
+      // ball: flat cel-shaded disc (measured on the original), radius 4 * per, no outline
+      const r = 4 * qb.per, disc = (dx, dy, rr, col) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(qb.x + dx, qb.y + dy, rr, 0, Math.PI * 2); ctx.fill(); };
+      ctx.save(); ctx.beginPath(); ctx.arc(qb.x, qb.y, r, 0, Math.PI * 2); ctx.clip();
+      disc(0, 0, r, '#958e01'); disc(0, -0.15 * r, r, '#c2bd01'); disc(-0.11 * r, -0.2 * r, 0.77 * r, '#ffff00');
+      ctx.restore();
     }
     drawPl(near, 'back');
   }
