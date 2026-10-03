@@ -356,9 +356,9 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/health') return json(res, 200, { ok: true, rooms: rooms.size, online: clients.size });
   const rel = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname).replace(/^\/+/, '');
   const file = path.join(WEB_DIR, rel);
-  if (!file.startsWith(WEB_DIR + path.sep)) { res.writeHead(403); return res.end(); }
+  if (!file.startsWith(WEB_DIR + path.sep)) { res.writeHead(403, { 'Cache-Control': 'no-store' }); return res.end(); }
   fs.readFile(file, (err, body) => {
-    if (err) { res.writeHead(404); return res.end('Not found'); }
+    if (err) { res.writeHead(404, { 'Cache-Control': 'no-store' }); return res.end('Not found'); }  // never cached by the CDN
     res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
     res.end(body);
   });
