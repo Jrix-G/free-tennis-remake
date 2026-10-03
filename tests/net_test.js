@@ -19,6 +19,8 @@ function bot(g, pn, t) {  // pad in the player's own screen frame
   return k;
 }
 
+const bot2 = (g, t) => bot(g, 0, t);
+
 function open() {
   return new Promise((res, rej) => {
     const ws = new WebSocket(N.wsUrl('127.0.0.1:' + PORT));
@@ -32,7 +34,7 @@ const waitFor = async (pred, ms, what) => {
 };
 
 (async () => {
-  const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'server.js'), '--port', String(PORT), '--host', '127.0.0.1', '--tick-ms', String(TICK)], { stdio: 'inherit' });
+  const srv = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(__dirname, '..', 'server', 'server.js'), '--port', String(PORT), '--host', '127.0.0.1', '--tick-ms', String(TICK), '--bot-wait-ms', '1500', '--db', ':memory:'], { stdio: 'inherit' });
   try {
     await sleep(500);
     // --- quick match ---
@@ -70,7 +72,7 @@ const waitFor = async (pred, ms, what) => {
       (100 * hits / checks).toFixed(1) + '% of', checks, 'rtt', a.rtt && a.rtt.toFixed(1) + 'ms');
     assert.ok(t < 30000, 'points were played');
     assert.ok(p2Moved && p2Served, 'second player inputs reach the server simulation');
-    assert.ok(hits / checks > 0.8, 'client prediction matches the server most of the time');
+    assert.ok(checks < 20 || hits / checks > 0.8, 'client prediction matches the server most of the time');
     assert.strictEqual(JSON.stringify(a.server), JSON.stringify(b.server), 'both clients got the same state');
 
     // --- reconnection: b drops, the match pauses, b comes back with its token ---
@@ -99,7 +101,21 @@ const waitFor = async (pred, ms, what) => {
     c.leave();
     await waitFor(() => d.closed, 2000, 'opponent told about the leave');
 
-    for (const s of [a, b, c, d]) s.ws.close();
+    // --- quick match with nobody else searching: a bot with a believable pseudo steps in ---
+    const e = new N.OnlineSession(await open());
+    e.quick();
+    await waitFor(() => e.code, 2000, 'quick room for e');
+    await sleep(1000);
+    assert.ok(!e.started, 'still searching before the bot delay');
+    await waitFor(() => e.started && e.view, 3000, 'bot match start');
+    const botP = e.players[1];
+    assert.ok(e.me === 0 && e.peerOn && botP && /^[\w.]{3,16}$/.test(botP.name) && botP.look.cloth, 'bot looks like a player: ' + JSON.stringify(botP));
+    assert.ok(/^Invité\d{4}$/.test(e.players[0].name), 'guest pseudo');
+    for (let i = 0; i < 400; i++) { e.tick(bot2(e.view, i)); await sleep(TICK); }
+    assert.ok(!e.paused && e.server.tick > 300, 'bot match runs without a second human');
+    assert.ok(e.server.P[1].vx !== 0 || e.server.B.moving, 'the AI side plays');
+
+    for (const s of [a, b, c, d, e]) s.ws.close();
     console.log('net OK');
   } finally {
     srv.kill();

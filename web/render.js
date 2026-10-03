@@ -186,8 +186,11 @@
     g.restore();
   }
 
-  function drawPlayer(ctx, x, y, scale, anim, af, facing, hairIdx) {
+  // look: { cloth, hair } cosmetic ids (cosmetics.js); defaults to the original colors of side hairIdx.
+  function drawPlayer(ctx, x, y, scale, anim, af, facing, hairIdx, look) {
     const p = pose(anim, af, facing), back = facing === 'back';
+    const CO = root.TennisCosmetics, lk = CO.sanitize(look, hairIdx || 0);
+    const clothIt = CO.find('cloth', lk.cloth), cloth = clothIt.color, clothD = clothIt.shade;
     const g = ctx;
     g.save();
     g.translate(x, y); g.scale(1.2 * scale * (back ? 1 : -1), 1.2 * scale);
@@ -200,14 +203,14 @@
       if (p.hideArms) return;  // held in front of the chest, hidden by the body (back view)
       seg(g, S[0], S[1], E[0], E[1], 6, 5, COL.skin, COL.skinD);
       seg(g, E[0], E[1], H[0], H[1], 5, 4.2, COL.skin, COL.skinD);
-      seg(g, S[0], S[1], lerp(S[0], E[0], 0.3), lerp(S[1], E[1], 0.3), 6.5, 6, COL.cloth, COL.clothD);
+      seg(g, S[0], S[1], lerp(S[0], E[0], 0.3), lerp(S[1], E[1], 0.3), 6.5, 6, cloth, clothD);
     };
     const drawOffArm = () => {
       if (p.hideArms) return;
       const S = [sx - 8.5, sh + 2], H = p.off, E = joint(S[0], S[1], H[0], H[1], 13, 13, lower);
       seg(g, S[0], S[1], E[0], E[1], 6, 5, COL.skin, COL.skinD);
       seg(g, E[0], E[1], H[0], H[1], 5, 4.2, COL.skin, COL.skinD);
-      seg(g, S[0], S[1], lerp(S[0], E[0], 0.3), lerp(S[1], E[1], 0.3), 6.5, 6, COL.cloth, COL.clothD);
+      seg(g, S[0], S[1], lerp(S[0], E[0], 0.3), lerp(S[1], E[1], 0.3), 6.5, 6, cloth, clothD);
     };
 
     // legs: knees bend towards the camera, so a crouch mostly shortens the projected leg
@@ -218,25 +221,25 @@
       const K = [lerp(Hp[0], f[0], 0.5) + sd * (0.5 + c * 0.35), lerp(Hp[1], f[1] - 3, 0.5) - lift * 0.3];
       seg(g, Hp[0], Hp[1], K[0], K[1], 8, 6.2, COL.skin, COL.skinD);
       seg(g, K[0], K[1], f[0], f[1] - 3, 6.2, 4.4, COL.skin, COL.skinD);
-      poly(g, [[f[0] - 3.8, f[1] - 4], [f[0] + 3.8, f[1] - 4.5], [f[0] + 4.2, f[1] + 0.5], [f[0] - 3.5, f[1] + 1]], COL.cloth);
+      poly(g, [[f[0] - 3.8, f[1] - 4], [f[0] + 3.8, f[1] - 4.5], [f[0] + 4.2, f[1] + 0.5], [f[0] - 3.5, f[1] + 1]], cloth);
       poly(g, [[f[0] - 3.5, f[1] - 0.6], [f[0] + 4.2, f[1] - 0.8], [f[0] + 4.2, f[1] + 0.5], [f[0] - 3.5, f[1] + 1]], COL.shoeD);
     });
 
     if (!p.over) drawRacketArm();
     if (back) drawOffArm();
     // dress: bodice + flared skirt, shaded on the right and along the hem
-    poly(g, [[sx - 8.5, sh], [sx + 8.5, sh], [hx + 6.5, waistY], [hx - 6.5, waistY]], COL.cloth);
-    poly(g, [[sx + 3, sh], [sx + 8.5, sh], [hx + 6.5, waistY], [hx + 2.5, waistY]], COL.clothD);
-    poly(g, [[hx - 7.5, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 6], [hx - 11.5, hipY + 6]], COL.cloth);
-    poly(g, [[hx + 3, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 6], [hx + 5.5, hipY + 6]], COL.clothD);
-    poly(g, [[hx - 11, hipY + 4], [hx + 11, hipY + 4], [hx + 11.5, hipY + 6], [hx - 11.5, hipY + 6]], COL.clothD);
+    poly(g, [[sx - 8.5, sh], [sx + 8.5, sh], [hx + 6.5, waistY], [hx - 6.5, waistY]], cloth);
+    poly(g, [[sx + 3, sh], [sx + 8.5, sh], [hx + 6.5, waistY], [hx + 2.5, waistY]], clothD);
+    poly(g, [[hx - 7.5, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 6], [hx - 11.5, hipY + 6]], cloth);
+    poly(g, [[hx + 3, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 6], [hx + 5.5, hipY + 6]], clothD);
+    poly(g, [[hx - 11, hipY + 4], [hx + 11, hipY + 4], [hx + 11.5, hipY + 6], [hx - 11.5, hipY + 6]], clothD);
     if (!back) drawOffArm();
 
     // neck + head (octagon), hair; front view adds the white visor and dark glasses
     seg(g, hdx * 0.9, sh + 1, hdx, hdy + 5, 4.5, 4.5, COL.skin, COL.skinD);
     const oct = (r, ox, oy) => Array.from({ length: 8 }, (_, i) => [hdx + ox + r * Math.cos((i + 0.5) * Math.PI / 4), hdy + oy + r * Math.sin((i + 0.5) * Math.PI / 4)]);
     poly(g, oct(7.6, 0, 0), COL.skin);
-    const hair = COL.hair[hairIdx || 0];
+    const hair = CO.find('hair', lk.hair).color;
     if (back) {
       poly(g, oct(8, 0, -0.5), hair);
       poly(g, [[hdx - 6, hdy - 5], [hdx - 1, hdy - 8], [hdx + 1, hdy - 3], [hdx - 4, hdy]], COL.hairL);
@@ -258,8 +261,8 @@
   }
 
   // ---------- game frame ----------
-  // g: game state; flip: draw from player 2's side (network guest).
-  function drawGame(ctx, g, flip, prev, alpha) {
+  // g: game state; flip: draw from player 2's side (network guest); looks: [look0, look1] (optional).
+  function drawGame(ctx, g, flip, prev, alpha, looks) {
     const s = flip ? -1 : 1;
     const lerp = (a, b) => (prev && alpha < 1 ? b + (a - b) * (1 - alpha) : b);
     ctx.drawImage(courtCanvas(), 0, 0);
@@ -270,7 +273,7 @@
     });
     const near = flip ? 1 : 0, far = 1 - near;
     for (const i of [far, near]) shadow(ctx, pl[i].q.x, pl[i].q.y, 34 * 0.6 * pl[i].q.per, 14 * 0.6 * pl[i].q.per);
-    const drawPl = (i, facing) => drawPlayer(ctx, pl[i].q.x, pl[i].q.y, 0.6 * pl[i].q.per, pl[i].mc.anim, pl[i].mc.af, facing, i);
+    const drawPl = (i, facing) => drawPlayer(ctx, pl[i].q.x, pl[i].q.y, 0.6 * pl[i].q.per, pl[i].mc.anim, pl[i].mc.af, facing, i, looks && looks[i]);
     drawPl(far, 'front');
     drawNet(ctx);
     if (g.bound.alpha > 0) {

@@ -6,21 +6,83 @@
 <title>Free Tennis</title>
 <meta name="description" content="Tennis Game remake : solo ou 2 joueurs en ligne, directement dans le navigateur.">
 <style>
-  :root { --bg: #0e0e0e; }
+  :root { --bg: #0e0e0e; --ui: "Trebuchet MS", Verdana, sans-serif; --accent: #ffd23a; }
   html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
   #wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
   #stage { position: relative; }
   canvas { display: block; width: 100%; height: 100%; cursor: default; }
-  #addr { position: absolute; display: none; font: bold 18px "Trebuchet MS", Verdana, sans-serif;
+  #addr { position: absolute; display: none; font: bold 18px var(--ui);
           padding: 4px 8px; border: 2px solid #fff; border-radius: 6px; background: #111; color: #fff; text-align: center; }
+  #acct-btn { position: absolute; top: 2%; right: 2%; display: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; font: bold 14px var(--ui); padding: 7px 14px; border: 0; border-radius: 999px;
+              background: rgba(0,0,0,0.6); color: #fff; cursor: pointer; }
+  #acct-btn:hover { background: rgba(0,0,0,0.8); }
+  #acct-btn.in::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                         background: #4cd964; margin-right: 7px; vertical-align: 1px; }
+  #acct-modal { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+                background: rgba(0,0,0,0.55); z-index: 10; }
+  #acct-card { position: relative; width: min(92%, 380px); max-height: 94%; overflow: auto; box-sizing: border-box;
+               padding: 20px 22px; border-radius: 14px; background: #15181f; color: #eee; font: 14px var(--ui);
+               border: 2px solid #ddd; }
+  #acct-card h2 { margin: 0 0 12px; font-size: 22px; }
+  #acct-close { position: absolute; top: 10px; right: 12px; border: 0; background: none; color: #aaa; font-size: 22px; cursor: pointer; }
+  #acct-card p { margin: 0 0 14px; line-height: 1.4; color: #ccc; }
+  #acct-google { min-height: 44px; display: flex; justify-content: center; }
+  #acct-card label { display: block; margin: 12px 0 6px; font-weight: bold; }
+  #acct-name { width: 100%; box-sizing: border-box; font: bold 16px var(--ui); padding: 7px 10px; border-radius: 8px;
+               border: 2px solid #555; background: #0b0d12; color: #fff; }
+  #acct-name:focus { border-color: var(--accent); outline: none; }
+  .acct-row { display: flex; gap: 14px; align-items: flex-start; }
+  #acct-preview { width: 120px; height: 150px; border-radius: 10px; flex: none; margin-top: 12px; }
+  .sws { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sw { width: 26px; height: 26px; border-radius: 50%; border: 2px solid #444; cursor: pointer; padding: 0; }
+  .sw.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  #acct-stats { margin-top: 14px; color: #ccc; }
+  .acct-actions { display: flex; gap: 10px; margin-top: 16px; }
+  .acct-actions button { flex: 1; font: bold 15px var(--ui); padding: 9px; border-radius: 8px; border: 0; cursor: pointer; }
+  #acct-save { background: var(--accent); color: #222; }
+  #acct-logout { background: #333; color: #eee; }
+  #acct-msg { min-height: 18px; margin-top: 10px; color: #ff8a80; }
+  #acct-msg.ok { color: #9ad0ff; }
 </style>
 </head>
 <body>
-<div id="wrap"><div id="stage"><canvas id="c" width="600" height="600"></canvas><input id="addr" spellcheck="false" placeholder="CODE" maxlength="4" autocomplete="off" style="text-transform:uppercase"></div></div>
+<div id="wrap"><div id="stage">
+  <canvas id="c" width="600" height="600"></canvas>
+  <input id="addr" spellcheck="false" placeholder="CODE" maxlength="4" autocomplete="off" style="text-transform:uppercase">
+  <button id="acct-btn">Se connecter</button>
+  <div id="acct-modal" role="dialog" aria-modal="true" aria-labelledby="acct-title">
+    <div id="acct-card">
+      <button id="acct-close" aria-label="Fermer">×</button>
+      <h2 id="acct-title">Connexion</h2>
+      <div id="acct-login">
+        <p>Connectez-vous pour garder votre pseudo, vos victoires et personnaliser votre joueuse.
+           Sans compte, vous jouez en invité.</p>
+        <div id="acct-google"></div>
+      </div>
+      <div id="acct-profile" style="display:none">
+        <label for="acct-name">Pseudo</label>
+        <input id="acct-name" maxlength="16" spellcheck="false" autocomplete="off">
+        <div class="acct-row">
+          <div style="flex:1">
+            <label>Tenue</label><div class="sws" id="acct-cloth"></div>
+            <label>Cheveux</label><div class="sws" id="acct-hair"></div>
+          </div>
+          <canvas id="acct-preview"></canvas>
+        </div>
+        <div id="acct-stats"></div>
+        <div class="acct-actions"><button id="acct-save">Enregistrer</button><button id="acct-logout">Se déconnecter</button></div>
+      </div>
+      <div id="acct-msg"></div>
+    </div>
+  </div>
+</div></div>
 <script src="game.js"></script>
+<script src="cosmetics.js"></script>
 <script src="net.js"></script>
 <script src="render.js"></script>
 <script src="audio.js"></script>
+<script src="account.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

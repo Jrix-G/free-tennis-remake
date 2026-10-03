@@ -3,13 +3,19 @@
 // Both browsers send one input per 30 Hz tick; the server consumes them in order (one per tick and
 // per player), steps the shared TennisLogic and broadcasts the state. Clients replay their own
 // unacknowledged inputs on top of it (net.js), so their own player and the ball react instantly.
-// Node >= 18, no dependency. Usage: node server/server.js [--port 8780] [--host 0.0.0.0] [--tick-ms 33.3]
+// Quick matches fall back to a bot after 5 s; accounts use "Sign in with Google" + SQLite.
+// Node >= 22.13, no dependency. Usage: node server/server.js [--port 8780] [--host 0.0.0.0]
+//   [--google-client-id ID] [--db data/tennis.db] [--tick-ms 33.3] [--bot-wait-ms 5000]
 'use strict';
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const L = require('../web/game.js');
+const CO = require('../web/cosmetics.js');
+const bots = require('./bots.js');
+const { verifyGoogleToken } = require('./auth.js');
+const { open: openDb, publicProfile } = require('./db.js');
 
 const arg = (name, def) => { const i = process.argv.indexOf('--' + name); return i > 0 ? process.argv[i + 1] : def; };
 const PORT = Number(arg('port', process.env.PORT || 8780));
@@ -20,6 +26,12 @@ const MAX_QUEUE = 4;          // inputs buffered per player; older ones are drop
 const STALE_MS = 1500;        // no input for that long (hidden tab...) -> pause
 const RECONNECT_MS = 60000;   // a dropped player keeps their slot that long
 const BALANCED = [5, 5, 5, 5, 0, 0];
+const BOT_WAIT_MS = Number(arg('bot-wait-ms', 5000));  // quick match: search time before a bot steps in
+// Google OAuth client id (public, not a secret). Without it, accounts are disabled and everyone plays as a guest.
+const GOOGLE_CLIENT_ID = arg('google-client-id', process.env.GOOGLE_CLIENT_ID || '');
+const db = openDb(arg('db', process.env.TENNIS_DB || path.join(__dirname, '..', 'data', 'tennis.db')));
+// Tests sign their own tokens: TENNIS_TEST_JWKS points to a JSON file of public keys.
+const keyProvider = process.env.TENNIS_TEST_JWKS ? async () => JSON.parse(fs.readFileSync(process.env.TENNIS_TEST_JWKS, 'utf8')).keys : undefined;
 
 // ---------- minimal RFC 6455 server side ----------
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -103,31 +115,44 @@ function newCode() {
 class Room {
   constructor(isPublic) {
     this.code = newCode(); this.isPublic = isPublic;
-    this.slots = [null, null];  // { token, ws, queue, last, ack, lastInput, goneAt }
-    this.G = null; this.prevOverSp = [true, true]; this.started = false;
+    // slot: { token, ws, queue, last, ack, lastInput, goneAt, name, look, userId } or a bot { bot, name, look, stats }
+    this.slots = [null, null];
+    this.G = null; this.prevOverSp = [true, true]; this.started = false; this.wasOver = false;
+    this.botAt = isPublic ? Date.now() + BOT_WAIT_MS : 0;  // quick match: a bot steps in after that
     rooms.set(this.code, this);
   }
   newMatch() {
+    const [a, b] = this.slots;
     this.G = L.createMatch({
-      names: ['P1', 'P2'], data: [BALANCED, BALANCED], ctrl: ['human', 'human'], matchMode: 0,
-      seed: crypto.randomInt(2 ** 32 - 1) + 1,
+      names: [a.name, b.name], data: [BALANCED, b.bot ? b.stats : BALANCED], ctrl: ['human', b.bot ? 'ai' : 'human'],
+      matchMode: 0, seed: crypto.randomInt(2 ** 32 - 1) + 1,
     });
-    this.prevOverSp = [true, true];
+    this.prevOverSp = [true, true]; this.wasOver = false;
   }
   attach(ws, idx, token) {
     let s = this.slots[idx];
     if (!s) s = this.slots[idx] = { token: token || crypto.randomBytes(9).toString('base64url'), queue: [], last: {}, ack: 0 };
     if (s.ws && s.ws !== ws) { s.ws.room = null; s.ws.close(); }  // a newer tab takes the slot
-    Object.assign(s, { ws, goneAt: 0, lastInput: Date.now(), queue: [] });
+    Object.assign(s, { ws, goneAt: 0, lastInput: Date.now(), queue: [], name: ws.name, look: ws.look, userId: ws.userId });
     ws.room = this; ws.idx = idx;
     ws.send({ t: 'room', code: this.code, me: idx, token: s.token, public: this.isPublic });
-    if (this.slots[0] && this.slots[1] && !this.started) { this.started = true; this.newMatch(); }
+    if (this.slots[0] && this.slots[1] && !this.started) this.start();
     this.notify();
   }
+  start() {  // the waiting player sent no input while searching: restart their clock, no false pause
+    this.started = true; this.newMatch();
+    for (const s of this.slots) if (!s.bot) s.lastInput = Date.now();
+  }
+  addBot() {
+    this.slots[1] = { bot: true, name: bots.botName(), look: bots.botLook(), stats: bots.botStats(), queue: [], last: {}, ack: 0 };
+    if (quickRoom === this) quickRoom = null;
+    this.start(); this.notify();
+  }
   notify() {
+    const players = this.slots.map((s) => (s ? { name: s.name, look: s.look } : null));
     for (let i = 0; i < 2; i++) {
       const s = this.slots[i], o = this.slots[1 - i];
-      if (s && s.ws) s.ws.send({ t: 'peer', on: !!(o && o.ws), started: this.started });
+      if (s && s.ws) s.ws.send({ t: 'peer', on: !!(o && (o.ws || o.bot)), started: this.started, players });
     }
   }
   detach(ws) {
@@ -161,12 +186,15 @@ class Room {
   }
   get paused() {
     const now = Date.now();
-    return this.slots.some((s) => !s || !s.ws || now - s.lastInput > STALE_MS);
+    return this.slots.some((s) => !s || (!s.bot && (!s.ws || now - s.lastInput > STALE_MS)));
   }
   tick() {
-    if (!this.started) return;
     const now = Date.now();
-    if (this.slots.some((s) => s && !s.ws && now - s.goneAt > RECONNECT_MS)) {
+    if (!this.started) {
+      if (this.botAt && now >= this.botAt && this.slots[0] && this.slots[0].ws && !this.slots[1]) this.addBot();
+      else return;
+    }
+    if (this.slots.some((s) => s && !s.bot && !s.ws && now - s.goneAt > RECONNECT_MS)) {
       for (const s of this.slots) if (s && s.ws) s.ws.send({ t: 'closed' });
       return this.close();
     }
@@ -177,6 +205,7 @@ class Room {
       for (const s of this.slots) if (s && s.queue.length) { s.ack = s.queue[s.queue.length - 1].s; s.queue = []; }
     } else {
       const pads = this.slots.map((s) => {
+        if (s.bot) return {};  // the logic's own AI plays that side
         const q = s.queue.shift();
         if (q) { s.ack = q.s; s.last = q.k; return q.k; }
         return Object.assign({}, s.last, { sp: false });  // late input: hold the direction
@@ -188,12 +217,22 @@ class Room {
       } else this.prevOverSp = [true, true];
       L.step(this.G, pads);
       ev = this.G.events;
+      if (this.G.over && !this.wasOver) this.record();
+      this.wasOver = this.G.over;
     }
     const g = JSON.stringify(this.G);
     for (let i = 0; i < 2; i++) {
       const s = this.slots[i];
       if (s && s.ws) s.ws.send('{"t":"snap","paused":' + paused + ',"ack":' + s.ack + ',"ev":' + JSON.stringify(ev) + ',"g":' + g + '}');
     }
+  }
+  record() {  // win / loss on the accounts of logged-in players
+    this.slots.forEach((s, i) => {
+      if (!s.userId) return;
+      db.recordResult(s.userId, this.G.match_winner === i);
+      const u = db.user(s.userId);
+      if (u && s.ws) s.ws.send({ t: 'profile', profile: publicProfile(u) });
+    });
   }
 }
 
@@ -211,7 +250,7 @@ function onMessage(ws, m) {
   } else if (m.t === 'join') {
     const r = rooms.get(String(m.code || '').toUpperCase().trim());
     if (!r) return ws.send({ t: 'err', msg: 'Partie introuvable' });
-    const mine = r.slots.findIndex((s) => s && m.token && s.token === m.token);  // reconnection
+    const mine = r.slots.findIndex((s) => s && !s.bot && m.token && s.token === m.token);  // reconnection
     if (mine >= 0) return r.attach(ws, mine, m.token);
     if (r.slots[1]) return ws.send({ t: 'err', msg: 'Partie déjà complète' });
     if (quickRoom === r) quickRoom = null;
@@ -241,15 +280,80 @@ setInterval(() => {
   }
 }, 10000);
 
+// ---------- identity: session cookie -> account, otherwise a guest pseudo ----------
+const COOKIE = 'tsess';
+function cookieToken(req) {
+  const m = /(?:^|;\s*)tsess=([A-Za-z0-9_-]+)/.exec(req.headers.cookie || '');
+  return m ? m[1] : null;
+}
+function identify(ws, user) {
+  ws.userId = user ? user.id : 0;
+  ws.name = user ? user.name : ws.name || 'Invité' + crypto.randomInt(1000, 10000);
+  ws.look = user ? JSON.parse(user.look) : CO.sanitize({}, 0);
+}
+function refreshUser(id) {  // profile edited or logged in elsewhere: update open sockets
+  const u = db.user(id);
+  for (const ws of clients) if (ws.userId === id) { identify(ws, u); ws.send({ t: 'profile', profile: publicProfile(u) }); }
+}
+
 // ---------- HTTP ----------
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
+
+function json(res, code, obj, headers) {
+  res.writeHead(code, Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, headers));
+  res.end(JSON.stringify(obj));
+}
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    // JSON only: a cross-site form cannot send that content type without a CORS preflight we never grant.
+    if (!/^application\/json/.test(req.headers['content-type'] || '')) return reject(new Error('json expected'));
+    let body = '';
+    req.on('data', (d) => { body += d; if (body.length > 16384) { reject(new Error('too large')); req.destroy(); } });
+    req.on('end', () => { try { resolve(JSON.parse(body || '{}')); } catch (e) { reject(e); } });
+  });
+}
+function sessionCookie(req, token, maxAge) {
+  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  return COOKIE + '=' + token + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + maxAge + secure;
+}
+
+async function api(req, res, pathname) {
+  const user = db.userBySession(cookieToken(req));
+  if (pathname === '/api/config' && req.method === 'GET') return json(res, 200, { googleClientId: GOOGLE_CLIENT_ID || null });
+  if (pathname === '/api/me' && req.method === 'GET') return json(res, 200, { profile: user ? publicProfile(user) : null });
+  if (req.method !== 'POST') return json(res, 405, { error: 'method' });
+  let body;
+  try { body = await readJson(req); } catch (e) { return json(res, 400, { error: 'Requête invalide' }); }
+  if (pathname === '/api/login') {
+    if (!GOOGLE_CLIENT_ID) return json(res, 503, { error: 'Connexion Google non configurée' });
+    let claims;
+    try { claims = await verifyGoogleToken(body.credential, GOOGLE_CLIENT_ID, keyProvider); } catch (e) {
+      return json(res, 401, { error: 'Connexion Google refusée' });
+    }
+    const u = db.loginGoogle(claims.sub, claims.email);
+    const token = db.createSession(u.id);
+    return json(res, 200, { profile: publicProfile(u) }, { 'Set-Cookie': sessionCookie(req, token, 365 * 86400) });
+  }
+  if (pathname === '/api/logout') {
+    db.dropSession(cookieToken(req));
+    return json(res, 200, { ok: true }, { 'Set-Cookie': sessionCookie(req, '', 0) });
+  }
+  if (pathname === '/api/profile') {
+    if (!user) return json(res, 401, { error: 'Non connecté' });
+    const err = db.updateProfile(user.id, body.name, body.look);
+    if (err) return json(res, 400, { error: err });
+    refreshUser(user.id);
+    return json(res, 200, { profile: publicProfile(db.user(user.id)) });
+  }
+  return json(res, 404, { error: 'not found' });
+}
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
-  if (url.pathname === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, rooms: rooms.size, online: clients.size }));
+  if (url.pathname.startsWith('/api/')) {
+    return api(req, res, url.pathname).catch((e) => { console.error(e); json(res, 500, { error: 'Erreur serveur' }); });
   }
+  if (url.pathname === '/health') return json(res, 200, { ok: true, rooms: rooms.size, online: clients.size });
   const rel = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname).replace(/^\/+/, '');
   const file = path.join(WEB_DIR, rel);
   if (!file.startsWith(WEB_DIR + path.sep)) { res.writeHead(403); return res.end(); }
@@ -267,10 +371,12 @@ server.on('upgrade', (req, sock) => {
   sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n' +
     'Sec-WebSocket-Accept: ' + accept + '\r\n\r\n');
   const ws = new WS(sock);
+  identify(ws, db.userBySession(cookieToken(req)));
   clients.add(ws);
   ws.onmessage = (m) => onMessage(ws, m);
   ws.onclose = () => { clients.delete(ws); if (ws.room) ws.room.detach(ws); };
   ws.send({ t: 'hello', online: clients.size });
 });
 
-server.listen(PORT, HOST, () => console.log('Free Tennis : http://' + (HOST === '0.0.0.0' ? 'localhost' : HOST) + ':' + PORT + '/'));
+server.listen(PORT, HOST, () => console.log('Free Tennis : http://' + (HOST === '0.0.0.0' ? 'localhost' : HOST) + ':' + PORT + '/' +
+  (GOOGLE_CLIENT_ID ? '' : '  (connexion Google désactivée : GOOGLE_CLIENT_ID absent)')));

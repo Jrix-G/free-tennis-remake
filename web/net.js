@@ -28,6 +28,7 @@
       this.peerOn = false; this.started = false; this.closed = false; this.online = 0; this.err = null;
       this.seq = 0; this.pending = []; this.server = null; this.ack = 0; this.paused = true;
       this.lastSnap = 0; this.lastPing = 0; this.rtt = null; this.view = null; this.onEvents = null;
+      this.players = [null, null]; this.onProfile = null;  // players: [{ name, look }] for each side
       this.played = [];  // [tick, event] already played, so prediction and server don't double sounds
       this.bind(ws);
     }
@@ -40,7 +41,7 @@
     create() { this.send({ t: 'create' }); }
     join(code, token) { this.err = null; this.send({ t: 'join', code, token }); }
     leave() { this.send({ t: 'leave' }); this.reset(); }
-    reset() { this.me = -1; this.code = null; this.started = false; this.peerOn = false; this.server = null; this.view = null; this.pending = []; this.closed = false; }
+    reset() { this.players = [null, null]; this.me = -1; this.code = null; this.started = false; this.peerOn = false; this.server = null; this.view = null; this.pending = []; this.closed = false; }
     onMsg(m) {
       if (m.t === 'hello') { this.online = m.online; this.send({ t: 'ping', c: now() }); }  // keepalive answer
       else if (m.t === 'pong') this.rtt = now() - m.c;
@@ -48,7 +49,8 @@
       else if (m.t === 'room') {
         if (this.code !== m.code) { this.seq = 0; this.pending = []; this.ack = 0; this.server = null; }
         Object.assign(this, { me: m.me, code: m.code, token: m.token, isPublic: m.public, err: null });
-      } else if (m.t === 'peer') { this.peerOn = m.on; this.started = m.started; }
+      } else if (m.t === 'peer') { this.peerOn = m.on; this.started = m.started; if (m.players) this.players = m.players; }
+      else if (m.t === 'profile') { if (this.onProfile) this.onProfile(m.profile); }
       else if (m.t === 'closed') { this.closed = true; this.peerOn = false; }
       else if (m.t === 'snap') {
         this.lastSnap = now(); this.paused = m.paused; this.started = true;

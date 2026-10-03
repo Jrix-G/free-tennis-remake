@@ -1,7 +1,7 @@
 // Screens, input, fixed 30 Hz loop, solo + network flows.
 (function () {
   'use strict';
-  const L = TennisLogic, R = TennisRender, A = TennisAudio, N = TennisNet, C = L.C;
+  const L = TennisLogic, R = TennisRender, A = TennisAudio, N = TennisNet, AC = TennisAccount, C = L.C;
   const TICK = 1000 / 30;
   const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
   const stage = document.getElementById('stage'), addr = document.getElementById('addr');
@@ -28,6 +28,7 @@
   const keys = {}; let spLatch = false;
   addEventListener('keydown', (e) => {
     A.unlock();
+    if (AC.isOpen()) { if (e.key === 'Escape') AC.close(); return; }  // typing in the account box
     if (document.activeElement === addr) { if (e.key === 'Enter') scene.onKey && scene.onKey('Enter'); return; }
     const k = KEYS[e.key];
     if (k) { e.preventDefault(); if (!keys[k] && k === 'sp') spLatch = true; keys[k] = true; }
@@ -59,7 +60,13 @@
   const digits = (s) => [0, 1, 2, 3, 4, 5].map((i) => Number(s.charAt(i)));
 
   let scene = null;
-  function go(s) { scene = s; spLatch = false; addr.style.display = 'none'; if (s.enter) s.enter(); }
+  const acctBtn = document.getElementById('acct-btn');
+  function go(s) {
+    scene = s; spLatch = false; addr.style.display = 'none';
+    acctBtn.style.display = s === Title ? 'block' : 'none';  // account box only from the title screen
+    if (s !== Title) AC.close();
+    if (s.enter) s.enter();
+  }
 
   // "Space bar" button clip: 12 animation ticks after the key press, then the action.
   function spaceClip(action) {
@@ -130,7 +137,7 @@
         }
         R.drawPlayer(ctx, 470, 160, 1.1, 'fore', 9, 'front', 1);
         R.text(ctx, 'COM', 472, 203, 26, { align: 'center', outline: false });
-        R.drawPlayer(ctx, 115, 400, 1.1, 'smash', 4, 'back', 0);
+        R.drawPlayer(ctx, 115, 400, 1.1, 'smash', 4, 'back', 0, AC.look());
         R.text(ctx, 'YOU', 112, 288, 26, { align: 'center', outline: false });
         R.spaceButton(ctx, 290, 494, sp.f);
       },
@@ -254,8 +261,8 @@
   }
 
   // ---------- match drawing shared by solo and network ----------
-  function drawMatch(g, flip, prev, alpha, meIdx) {
-    R.drawGame(ctx, g, flip, prev, alpha);
+  function drawMatch(g, flip, prev, alpha, meIdx, looks) {
+    R.drawGame(ctx, g, flip, prev, alpha, looks);
     R.text(ctx, g.score_txt, 8, 590, 18);
     // quit button
     ctx.fillStyle = 'rgba(255,255,255,0.85)'; R.roundRect(ctx, 576, 6, 19, 19, 3); ctx.fill();
@@ -297,7 +304,7 @@
         for (const e of G.events) A.play(e);
         if (G.over) afterMatch(G);
       },
-      draw(alpha) { drawMatch(G, false, prev, alpha, 0); },
+      draw(alpha) { drawMatch(G, false, prev, alpha, 0, [AC.look(), null]); },
       onClick(x, y) { if (inRect(x, y, QUIT)) go(Title); },
       onKey(k) { if (k === 'Escape') go(Title); },
     });
@@ -333,7 +340,7 @@
   // ---------- online lobby ----------
   function Lobby(autoCode) {
     // mode: null | 'quick' (matchmaking) | 'private' (room created, waiting) | 'code' (typing a code)
-    let mode = null, status = '', copied = 0;
+    let mode = null, status = '', copied = 0, searchT0 = 0;
     const BTN_QUICK = [150, 130, 300, 40], BTN_CREATE = [150, 185, 300, 40], BTN_JOIN = [150, 240, 300, 40];
     const BTN_GO = [235, 395, 130, 36], BTN_COPY = [205, 420, 190, 30], BTN_BACK = [230, 520, 130, 32];
     netOn();
@@ -360,7 +367,7 @@
         }
         if (sess.ws.readyState !== 1) status = 'Connexion au serveur...';
         else if (status === 'Connexion au serveur...') status = '';
-        if (sess.code && mode === 'quick') status = 'Recherche d\'un adversaire...';
+        if (sess.code && mode === 'quick') status = "Recherche d'un adversaire... " + Math.floor((performance.now() - searchT0) / 1000) + ' s';
         if (sess.code && (mode === 'private' || mode === 'joining')) { mode = 'private'; status = "En attente de l'adversaire..."; }
       },
       draw() {
@@ -385,13 +392,15 @@
         if (mode === 'code') R.text(ctx, 'Code donné par votre adversaire :', 300, 318, 16, { align: 'center', outline: false });
         if (mode === 'code') btn(BTN_GO, 'OK');
         R.text(ctx, status, 300, 482, 16, { align: 'center', outline: false, color: '#9ad0ff' });
+        const who = AC.profile ? 'Connecté : ' + AC.profile.name : "Invité (connexion depuis l'accueil)";
+        R.text(ctx, who, 300, 112, 14, { align: 'center', outline: false, color: '#ccc' });
         if (sess && sess.online) R.text(ctx, sess.online + (sess.online > 1 ? ' joueurs en ligne' : ' joueur en ligne'), 300, 508, 13, { align: 'center', outline: false, color: '#ccc' });
         btn(BTN_BACK, 'RETOUR');
       },
       onClick(x, y) {
         if (inRect(x, y, BTN_BACK)) { netOff(); return go(Title); }
         if (!sess) return;
-        if (inRect(x, y, BTN_QUICK)) { A.play('click'); addr.style.display = 'none'; mode = 'quick'; status = ''; sess.quick(); return; }
+        if (inRect(x, y, BTN_QUICK)) { A.play('click'); addr.style.display = 'none'; mode = 'quick'; status = ''; searchT0 = performance.now(); sess.quick(); return; }
         if (inRect(x, y, BTN_CREATE)) { A.play('click'); addr.style.display = 'none'; mode = 'private'; status = ''; sess.create(); return; }
         if (inRect(x, y, BTN_JOIN)) {
           A.play('click'); if (sess.code) sess.leave();
@@ -414,18 +423,28 @@
 
   // ---------- online match ----------
   function startNet() {
-    let prev = null;
+    let prev = null, intro = 75;  // "VS" banner for the first 2.5 s
     sess.onEvents = (ev) => ev.forEach((e) => A.play(e));
+    sess.onProfile = (p) => AC.update(p);
     const leave = () => { sess.onEvents = null; netOff(); go(Title); };
     go({
       tick() {
         prev = sess.view ? snapPos(sess.view) : null;
         sess.tick(readPad());
+        if (intro > 0 && sess.view) intro--;
       },
       draw(alpha) {
         const g = sess.view;
         if (!g) return;
-        drawMatch(g, sess.me === 1, prev, alpha, sess.me);
+        drawMatch(g, sess.me === 1, prev, alpha, sess.me, sess.players.map((p) => p && p.look));
+        const opp = sess.players[1 - sess.me];
+        if (intro > 0 && opp) {
+          ctx.globalAlpha = Math.min(1, intro / 15);
+          ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 200, 600, 100);
+          R.text(ctx, 'Adversaire trouvé !', 300, 236, 22, { align: 'center', color: '#9ad0ff' });
+          R.text(ctx, 'VS  ' + opp.name, 300, 280, 34, { align: 'center', color: '#ffd23a' });
+          ctx.globalAlpha = 1;
+        }
         const rtt = sess.rtt;
         R.text(ctx, 'VOUS : P' + (sess.me + 1) + (rtt != null ? '  ping ' + Math.round(rtt) + ' ms' : ''), 8, 20, 14);
         let msg = null;
@@ -454,6 +473,7 @@
     requestAnimationFrame(frame);
   }
   resize();
+  AC.init();
   go(Title);
   requestAnimationFrame(frame);
 })();

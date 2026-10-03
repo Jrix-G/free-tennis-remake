@@ -1,10 +1,12 @@
 # systemd *user* unit (~/.config/systemd/user/): the game server, local only (the tunnel exposes it).
+# Accounts live in ~/tennis-data/tennis.db. Optional ~/tennis-data/env: GOOGLE_CLIENT_ID=<id>.apps.googleusercontent.com
 [Unit]
 Description=Free Tennis online - game server
 After=network-online.target
 
 [Service]
-ExecStart=%h/.nvm/versions/node/v22.22.1/bin/node %h/tennis/server/server.js --port 8780 --host 127.0.0.1
+EnvironmentFile=-%h/tennis-data/env
+ExecStart=%h/.nvm/versions/node/v22.22.1/bin/node --disable-warning=ExperimentalWarning %h/tennis/server/server.js --port 8780 --host 127.0.0.1 --db %h/tennis-data/tennis.db
 Restart=always
 RestartSec=2
 
