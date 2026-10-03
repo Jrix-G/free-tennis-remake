@@ -30,14 +30,21 @@ function open(role) {
 
 (async () => {
   const srv = spawn(py, [path.join(__dirname, '..', 'tennis.py'), '--port', String(PORT), '--no-browser'], { stdio: 'ignore' });
+  // Second instance = the guest's own launcher, used to check LAN session discovery.
+  const srv2 = spawn(py, [path.join(__dirname, '..', 'tennis.py'), '--port', String(PORT + 1), '--no-browser'], { stdio: 'ignore' });
+  const listed = async () => (await (await fetch('http://127.0.0.1:' + (PORT + 1) + '/sessions')).json())
+    .some((g) => g.addr.endsWith(':' + PORT));
+  const waitFor = async (pred, ms) => { for (let t = 0; t < ms; t += 250) { if (await pred()) return true; await sleep(250); } return false; };
   try {
     await sleep(800);
     const hws = await open('host');
     const host = new N.HostSession(hws, { seed: 1234 });
+    assert.ok(await waitFor(listed, 5000), 'open game is discovered by another instance');
     const cws = await open('client');
     const client = new N.ClientSession(cws);
     await sleep(200);
     assert.ok(host.peerOn && client.hostOn, 'peers see each other');
+    assert.ok(await waitFor(async () => !(await listed()), 6000), 'full game disappears from the list');
 
     let t = 0, clientMoved = false, p2Served = false;
     const startX = host.G.P[1].vx;
@@ -72,5 +79,6 @@ function open(role) {
     console.log('net OK', p2Served ? '(P2 served)' : '');
   } finally {
     srv.kill();
+    srv2.kill();
   }
 })().catch((e) => { console.error(e); process.exit(1); });

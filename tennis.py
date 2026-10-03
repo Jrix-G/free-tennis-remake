@@ -13,6 +13,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 import webbrowser
 from urllib.parse import urlparse, parse_qs
 
@@ -21,6 +22,14 @@ WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
 peers = {}            # role ('host' | 'client') -> WSConn
 peers_lock = threading.Lock()
+
+# LAN discovery: a hosting instance broadcasts a small UDP beacon every second; every instance
+# listens and lists the sessions it hears at /sessions, so players pick a game instead of an IP.
+DISCOVERY_PORT = 41234
+INSTANCE = os.urandom(4).hex()
+HOST_NAME = (socket.gethostname().split('.')[0] or 'PC')[:20]
+sessions = {}         # instance id -> {'name', 'addr', 'seen'}
+sessions_lock = threading.Lock()
 
 
 def lan_ips():
@@ -99,6 +108,79 @@ class WSConn:
                     return msg.decode('utf-8', 'replace')
 
 
+def discovery(http_port):
+    # Multicast (independent of the subnet mask, looped back locally) on every interface,
+    # plus a limited broadcast for networks that drop multicast.
+    group = '239.255.41.234'
+    tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    tx.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, 'SO_REUSEPORT'):  # several instances on one machine (tests)
+        try:
+            rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except OSError:
+            pass
+    try:
+        rx.bind(('', DISCOVERY_PORT))
+        rx.settimeout(0.5)
+    except OSError as e:
+        print('Découverte réseau indisponible (%s) : utilisez l\'IP.' % e)
+        rx = None
+    beacon = json.dumps({'app': 'freetennis', 'v': 1, 'id': INSTANCE, 'name': HOST_NAME,
+                         'port': http_port}).encode()
+    joined, last, last_join = set(), 0.0, 0.0
+    while True:
+        now = time.time()
+        if rx is not None and now - last_join >= 5.0:  # interfaces may appear later (hotspot...)
+            last_join = now
+            for ip in ['0.0.0.0'] + lan_ips():
+                if ip not in joined:
+                    try:
+                        rx.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                                      socket.inet_aton(group) + socket.inet_aton(ip))
+                        joined.add(ip)
+                    except OSError:
+                        pass
+        if now - last >= 1.0:
+            last = now
+            with peers_lock:
+                open_game = 'host' in peers and 'client' not in peers
+            if open_game:
+                for ip in lan_ips() + ['127.0.0.1']:
+                    try:
+                        tx.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(ip))
+                        tx.sendto(beacon, (group, DISCOVERY_PORT))
+                    except OSError:
+                        pass
+                try:
+                    tx.sendto(beacon, ('255.255.255.255', DISCOVERY_PORT))
+                except OSError:
+                    pass
+        if rx is None:
+            time.sleep(0.5)
+            continue
+        try:
+            data, (ip, _) = rx.recvfrom(1024)
+            m = json.loads(data.decode())
+            if m.get('app') == 'freetennis' and m.get('id') != INSTANCE:
+                with sessions_lock:  # keyed by instance: a PC with several IPs shows once
+                    sessions[m['id']] = {'name': str(m.get('name', '?'))[:20],
+                                         'addr': '%s:%d' % (ip, int(m['port'])), 'seen': time.time()}
+        except (socket.timeout, ValueError, KeyError, OSError):
+            pass
+
+
+def list_sessions():
+    now = time.time()
+    with sessions_lock:
+        for k in [k for k, v in sessions.items() if now - v['seen'] > 3]:
+            del sessions[k]
+        return sorted(({'name': v['name'], 'addr': v['addr']} for v in sessions.values()),
+                      key=lambda d: d['name'])
+
+
 def other(role):
     return 'client' if role == 'host' else 'host'
 
@@ -125,8 +207,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
-        if url.path == '/info':
-            body = json.dumps({'ips': lan_ips(), 'port': self.server.server_address[1]}).encode()
+        if url.path in ('/info', '/sessions'):
+            if url.path == '/info':
+                data = {'ips': lan_ips(), 'port': self.server.server_address[1], 'name': HOST_NAME}
+            else:
+                data = list_sessions()
+            body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -188,6 +274,7 @@ def main():
         srv = http.server.ThreadingHTTPServer(('0.0.0.0', args.port), Handler)
     except OSError as e:
         sys.exit('Port %d indisponible (%s). Essayez --port 8001' % (args.port, e))
+    threading.Thread(target=discovery, args=(args.port,), daemon=True).start()
     url = 'http://localhost:%d/' % args.port
     print('Free Tennis : %s' % url)
     print('Multijoueur : l\'autre machine rejoint avec %s' %

@@ -316,13 +316,15 @@
     return '(autre réseau)';
   }
   function Lobby() {
-    let mode = null, info = null, status = '', ws = null;
-    const BTN_HOST = [170, 150, 250, 40], BTN_JOIN = [170, 240, 250, 40], BTN_GO = [230, 375, 130, 36], BTN_BACK = [230, 520, 130, 32];
+    // mode: null | 'host' | 'join' (sessions found on the LAN) | 'manual' (type an IP)
+    let mode = null, info = null, status = '', ws = null, found = [], poll = null;
+    const BTN_HOST = [170, 150, 250, 40], BTN_JOIN = [170, 225, 250, 40], BTN_GO = [230, 375, 130, 36], BTN_BACK = [230, 520, 130, 32];
+    const BTN_MANUAL = [210, 445, 180, 28], row = (i) => [120, 296 + i * 46, 360, 38];
     fetch('/info').then((r) => r.json()).then((j) => { info = j; }).catch(() => {});
     try { addr.value = localStorage.getItem('tennis.addr') || ''; } catch (e) { /* storage unavailable */ }
-    function cleanup() { if (ws) { ws.onclose = null; ws.close(); ws = null; } }
+    function cleanup() { if (ws) { ws.onclose = null; ws.close(); ws = null; } if (poll) { clearInterval(poll); poll = null; } addr.style.display = 'none'; }
     function host() {
-      mode = 'host'; status = 'Connexion au serveur local...'; addr.style.display = 'none';
+      mode = 'host'; status = 'Connexion au serveur local...';
       ws = new WebSocket(N.wsUrl(location.host, 'host'));
       const h = new N.HostSession(ws);
       ws.onopen = () => { status = "En attente de l'adversaire..."; };
@@ -332,54 +334,80 @@
         if (h.peerOn) { clearInterval(check); startNet(h, ws, true); }
       }, 100);
     }
-    function join() {
-      let a = addr.value.trim().replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    function browse() {
+      mode = 'join'; status = ''; found = [];
+      const refresh = () => fetch('/sessions').then((r) => r.json()).then((j) => { found = j; }).catch(() => { found = []; });
+      refresh(); poll = setInterval(() => { if (scene !== self) return clearInterval(poll); refresh(); }, 1000);
+    }
+    function join(raw) {
+      let a = String(raw).trim().replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       if (!a) { status = "Entrez l'adresse IP de l'hôte."; return; }
       if (!/:\d+$/.test(a)) a += ':8000';
-      try { localStorage.setItem('tennis.addr', addr.value.trim()); } catch (e) { /* ignore */ }
-      cleanup();
+      if (ws) { ws.onclose = null; ws.close(); ws = null; }
       status = 'Connexion à ' + a + '...';
       ws = new WebSocket(N.wsUrl(a, 'client'));
       const c = new N.ClientSession(ws);
-      ws.onerror = () => { status = 'Impossible de joindre ' + a + ' (IP, port, pare-feu ?)'; };
+      ws.onerror = () => { status = 'Impossible de joindre ' + a + ' (réseau, pare-feu ?)'; };
       const check = setInterval(() => {
         if (scene !== self || !ws) return clearInterval(check);
-        if (ws.readyState === 1 && !c.hostOn) status = "Connecté au serveur, en attente de l'hôte...";
-        if (c.latest) { clearInterval(check); addr.style.display = 'none'; startNet(c, ws, false); }
+        if (ws.readyState === 1 && !c.hostOn) status = "Connecté, en attente de l'hôte...";
+        if (c.latest) { clearInterval(check); if (poll) { clearInterval(poll); poll = null; } addr.style.display = 'none'; startNet(c, ws, false); }
       }, 100);
     }
     const self = {
       draw() {
         R.drawScene(ctx); R.panel(ctx);
         R.text(ctx, '2 PLAYERS', 300, 80, 34, { align: 'center', outline: false });
-        const btn = (r, s) => {
+        const btn = (r, s, size) => {
           const hot = inRect(mx, my, r);
           ctx.fillStyle = hot ? '#ffd23a' : '#f2f2f2'; R.roundRect(ctx, r[0], r[1], r[2], r[3], 8); ctx.fill();
-          R.text(ctx, s, r[0] + r[2] / 2, r[1] + r[3] / 2 + 7, 20, { align: 'center', outline: false, color: '#222' });
+          R.text(ctx, s, r[0] + r[2] / 2, r[1] + r[3] / 2 + (size || 20) * 0.35, size || 20, { align: 'center', outline: false, color: '#222' });
         };
         btn(BTN_HOST, 'HÉBERGER'); btn(BTN_JOIN, 'REJOINDRE');
         if (mode === 'host') {
-          R.text(ctx, "Donnez à l'autre joueur :", 300, 325, 17, { align: 'center', outline: false });
-          const ips = info ? info.ips.map((ip) => ip + ':' + info.port + '  ' + ipKind(ip)) : ['...'];
-          ips.slice(0, 3).forEach((s, i) => R.text(ctx, s, 300, 360 + i * 30, 22, { align: 'center', outline: false, color: '#ffd23a' }));
+          R.text(ctx, 'Partie ouverte :', 300, 315, 17, { align: 'center', outline: false });
+          R.text(ctx, info ? info.name : '...', 300, 350, 28, { align: 'center', outline: false, color: '#ffd23a' });
+          R.text(ctx, "Elle apparaît dans REJOINDRE chez l'autre joueur (même réseau).", 300, 382, 14, { align: 'center', outline: false, color: '#ccc' });
+          if (info) R.text(ctx, 'Sinon, IP : ' + info.ips.map((ip) => ip + ':' + info.port + ' ' + ipKind(ip)).slice(0, 2).join('   '), 300, 412, 13, { align: 'center', outline: false, color: '#ccc' });
         }
         if (mode === 'join') {
+          if (!found.length) {
+            R.text(ctx, 'Recherche de parties sur le réseau...', 300, 330, 18, { align: 'center', outline: false });
+            R.text(ctx, "(même box, même Wi-Fi ou partage de connexion d'un téléphone)", 300, 356, 14, { align: 'center', outline: false, color: '#ccc' });
+          }
+          found.slice(0, 3).forEach((g, i) => {
+            const r = row(i), hot = inRect(mx, my, r);
+            ctx.fillStyle = hot ? '#ffd23a' : '#f2f2f2'; R.roundRect(ctx, r[0], r[1], r[2], r[3], 8); ctx.fill();
+            R.text(ctx, 'Partie de ' + g.name, r[0] + 14, r[1] + 25, 19, { outline: false, color: '#222' });
+            R.text(ctx, g.addr, r[0] + r[2] - 12, r[1] + 24, 12, { align: 'right', outline: false, color: '#666' });
+          });
+          btn(BTN_MANUAL, 'Entrer une IP...', 15);
+        }
+        if (mode === 'manual') {
           R.text(ctx, "Adresse de l'hôte (IP:port) :", 300, 318, 16, { align: 'center', outline: false });
           btn(BTN_GO, 'OK');
         }
-        R.text(ctx, status, 300, 470, 16, { align: 'center', outline: false, color: '#9ad0ff' });
+        R.text(ctx, status, 300, 494, 16, { align: 'center', outline: false, color: '#9ad0ff' });
         R.text(ctx, 'Hôte = joueur du bas (P1), invité = joueur du haut (P2)', 300, 125, 14, { align: 'center', outline: false, color: '#ccc' });
         btn(BTN_BACK, 'RETOUR');
       },
       tick() {},
       onClick(x, y) {
         if (inRect(x, y, BTN_BACK)) { cleanup(); return go(Title); }
-        if (inRect(x, y, BTN_HOST) && mode !== 'host') { cleanup(); host(); }
-        if (inRect(x, y, BTN_JOIN)) { cleanup(); mode = 'join'; status = ''; addr.style.display = 'block'; positionAddr(); addr.focus(); }
-        if (mode === 'join' && inRect(x, y, BTN_GO)) join();
+        if (inRect(x, y, BTN_HOST) && mode !== 'host') { cleanup(); host(); return; }
+        if (inRect(x, y, BTN_JOIN) && mode !== 'join') { cleanup(); browse(); return; }
+        if (mode === 'join') {
+          const i = found.slice(0, 3).findIndex((g, k) => inRect(x, y, row(k)));
+          if (i >= 0) { A.play('click'); join(found[i].addr); }
+          else if (inRect(x, y, BTN_MANUAL)) { cleanup(); mode = 'manual'; status = ''; addr.style.display = 'block'; positionAddr(); addr.focus(); }
+        } else if (mode === 'manual' && inRect(x, y, BTN_GO)) manualJoin();
       },
-      onKey(k) { if (k === 'Enter' && mode === 'join') join(); if (k === 'Escape') { cleanup(); go(Title); } },
+      onKey(k) { if (k === 'Enter' && mode === 'manual') manualJoin(); if (k === 'Escape') { cleanup(); go(Title); } },
     };
+    function manualJoin() {
+      try { localStorage.setItem('tennis.addr', addr.value.trim()); } catch (e) { /* ignore */ }
+      join(addr.value);
+    }
     return self;
   }
 

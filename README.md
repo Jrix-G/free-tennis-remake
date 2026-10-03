@@ -10,11 +10,10 @@ M coupe le son, Échap revient au menu. Souris : menus, barres de stats, choix d
 
 **Multijoueur (2 machines)** :
 1. Les deux joueurs lancent le jeu et cliquent sur **2 PLAYERS**.
-2. L'hôte clique sur **HÉBERGER**. Son IP:port s'affiche (aussi dans le terminal).
-3. L'autre clique sur **REJOINDRE**, tape l'IP:port de l'hôte puis OK. Il peut aussi ouvrir `http://IP_HÔTE:8000` dans un navigateur, sans rien installer.
-4. Le jeu marche en LAN sans configuration. Autorisez Python dans le pare-feu si le système le demande.
-   Pas sur le même réseau (ou Wi-Fi d'école qui isole les machines) : installez Tailscale sur les deux PC, connectés au même compte
-   ou avec la machine partagée, puis utilisez l'IP marquée (Tailscale). Autre solution : rediriger le port TCP 8000 de la box vers l'hôte.
+2. L'hôte clique sur **HÉBERGER** : sa partie s'annonce automatiquement sur le réseau local.
+3. L'autre clique sur **REJOINDRE** : les parties trouvées s'affichent, un clic suffit (sinon « Entrer une IP... »).
+4. Même box, même Wi-Fi ou partage de connexion d'un téléphone : rien à configurer. Autorisez Python dans le pare-feu si demandé.
+   Wi-Fi d'école (machines isolées) ou chacun chez soi : passez par un partage de connexion, ou redirigez le port TCP 8000 de la box vers l'hôte et entrez l'IP publique.
    Autre port : `./run.sh --port 8001`.
 
 L'hôte fait tourner la simulation autoritaire. L'invité envoie ses touches et reçoit 30 états par seconde, qu'il interpole avec prédiction de son propre déplacement.
