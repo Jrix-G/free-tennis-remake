@@ -28,11 +28,16 @@ function botName() {
   return pick(styles)().slice(0, 16);
 }
 
-function botStats() {  // [forehand, backhand, serve, footwork, netplay, tech], like the COM roster
-  const s = () => 3 + rnd(5);
-  return [s(), s(), s(), s(), rnd(6), 0];
+// A credible opponent for this player: abilities within one point of theirs, a rating close to theirs.
+function botFor(stats, elo, level) {
+  const near = (v) => Math.max(1, Math.min(9, v + rnd(3) - 1));
+  return {
+    stats: stats.map(near),
+    elo: Math.max(100, (elo || 1000) + rnd(121) - 60),
+    level: Math.max(1, (level || 1) + rnd(5) - 2),
+  };
 }
 
 const botLook = () => CO.random(() => rnd(1e6) / 1e6);
 
-module.exports = { botName, botStats, botLook };
+module.exports = { botName, botFor, botLook };

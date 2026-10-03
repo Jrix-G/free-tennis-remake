@@ -42,8 +42,27 @@
   .acct-actions button { flex: 1; font: bold 15px var(--ui); padding: 9px; border-radius: 8px; border: 0; cursor: pointer; }
   #acct-save { background: var(--accent); color: #222; }
   #acct-logout { background: #333; color: #eee; }
+  #acct-level { font-weight: bold; color: var(--accent); }
+  #acct-xpbar { position: relative; height: 16px; margin-top: 8px; border-radius: 8px; background: #2a2f3a; overflow: hidden; }
+  #acct-xp { height: 100%; background: linear-gradient(90deg, #2a8de0, #1ee8e0); }
+  #acct-xptxt { position: absolute; inset: 0; text-align: center; font-size: 11px; line-height: 16px; color: #fff; }
+  #acct-points { color: #7dff8a; font-weight: normal; margin-left: 6px; }
+  .ab { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+  .ab span { width: 92px; }
+  .ab b { display: flex; gap: 3px; flex: 1; }
+  .ab i { width: 12px; height: 12px; border-radius: 3px; background: #333a46; }
+  .ab i.on { background: var(--accent); }
+  .ab button { width: 26px; height: 26px; border-radius: 6px; border: 0; background: #e8e8e8; color: #222; font: bold 16px var(--ui); cursor: pointer; }
+  .ab button:disabled { opacity: 0.25; cursor: default; }
   #acct-msg { min-height: 18px; margin-top: 10px; color: #ff8a80; }
   #acct-msg.ok { color: #9ad0ff; }
+  /* sale-sticker style banner, bottom right of the page */
+  #zinger { position: fixed; right: 18px; bottom: 18px; z-index: 20; pointer-events: none;
+            padding: 10px 18px; background: #e10600; color: #fff; border: 3px solid #fff; border-radius: 6px;
+            font: 900 22px/1 Impact, "Arial Black", var(--ui); letter-spacing: 1px; text-transform: uppercase;
+            box-shadow: 0 6px 18px rgba(225,6,0,0.55); transform: rotate(-5deg); animation: zinger 1.2s ease-in-out infinite; }
+  @keyframes zinger { 50% { transform: rotate(-5deg) scale(1.08); } }
+  @media (prefers-reduced-motion: reduce) { #zinger { animation: none; } }
 </style>
 </head>
 <body>
@@ -56,11 +75,15 @@
       <button id="acct-close" aria-label="Fermer">×</button>
       <h2 id="acct-title">Connexion</h2>
       <div id="acct-login">
-        <p>Connectez-vous pour garder votre pseudo, vos victoires et personnaliser votre joueuse.
-           Sans compte, vous jouez en invité.</p>
+        <p>Connectez-vous pour gagner de l'XP et de l'Elo en partie rapide, débloquer des capacités
+           (tout le monde commence à 3) et personnaliser votre joueuse. Sans compte, vous jouez en invité.</p>
         <div id="acct-google"></div>
       </div>
       <div id="acct-profile" style="display:none">
+        <div id="acct-level"></div>
+        <div id="acct-xpbar"><div id="acct-xp"></div><span id="acct-xptxt"></span></div>
+        <label>Capacités <span id="acct-points"></span></label>
+        <div id="acct-abil"></div>
         <label for="acct-name">Pseudo</label>
         <input id="acct-name" maxlength="16" spellcheck="false" autocomplete="off">
         <div class="acct-row">
@@ -77,12 +100,14 @@
     </div>
   </div>
 </div></div>
-<script src="game.js?v=2"></script>
-<script src="cosmetics.js?v=2"></script>
-<script src="net.js?v=2"></script>
-<script src="render.js?v=2"></script>
-<script src="audio.js?v=2"></script>
-<script src="account.js?v=2"></script>
-<script src="main.js?v=2"></script>
+<div id="zinger">Zinger is noob</div>
+<script src="game.js?v=3"></script>
+<script src="cosmetics.js?v=3"></script>
+<script src="progression.js?v=3"></script>
+<script src="net.js?v=3"></script>
+<script src="render.js?v=3"></script>
+<script src="audio.js?v=3"></script>
+<script src="account.js?v=3"></script>
+<script src="main.js?v=3"></script>
 </body>
 </html>

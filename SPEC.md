@@ -132,6 +132,9 @@
    (FREEZE, pose « win » quand la balle l'a dépassé) ne s'appliquent qu'à COM. Stats équilibrées (5) pour
    les deux joueurs. Mode exhibition (pas d'applaudissements). Revanche avec Espace. Le serveur simule le match ;
    partie rapide (appariement) ou partie privée rejointe par code de 4 caractères ou lien `#CODE`.
+8 bis. **Menu et progression** (écart volontaire) : Exhibition supprimé ; menu Partie rapide / Tournament / Héberger-Rejoindre /
+   Classement. Au tournoi, le joueur ne choisit plus une joueuse du roster : il joue avec ses propres capacités (3 au départ,
+   débloquées en partie rapide, voir `web/progression.js`).
 9. **Rendu** : la simulation reste à 30 Hz fixe. L'affichage suit requestAnimationFrame et interpole les
    positions entre deux ticks (affichage plus fluide, timings identiques).
 

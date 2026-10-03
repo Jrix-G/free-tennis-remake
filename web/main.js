@@ -1,7 +1,7 @@
 // Screens, input, fixed 30 Hz loop, solo + network flows.
 (function () {
   'use strict';
-  const L = TennisLogic, R = TennisRender, A = TennisAudio, N = TennisNet, AC = TennisAccount, C = L.C;
+  const L = TennisLogic, R = TennisRender, A = TennisAudio, N = TennisNet, AC = TennisAccount, PG = TennisProgression, C = L.C;
   const TICK = 1000 / 30;
   const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
   const stage = document.getElementById('stage'), addr = document.getElementById('addr');
@@ -78,12 +78,12 @@
   }
 
   // ---------- title ----------
-  const MENU = [['EXHIBITION', 346], ['TOURNAMENT', 376], ['2 PLAYERS', 406]];
+  const MENU = [['PARTIE RAPIDE', 346], ['TOURNAMENT', 376], ['HÉBERGER / REJOINDRE', 406], ['CLASSEMENT', 436]];
   const Title = {
     enter() {
       resetData(); A.playMusic('title');
       const m = /^#([A-Za-z0-9]{4})$/.exec(location.hash);  // shared invite link
-      if (m) go(Lobby(m[1]));
+      if (m) go(Lobby({ code: m[1] }));
     },
     tick() {},
     draw() {
@@ -92,88 +92,72 @@
       const help = ['Key Operation:', 'Space key to hit the ball.', 'Arrow key to move or  to aim the ball direction',
         'at the moment of stroke.', 'Getting 3 games first  to win.'];
       help.forEach((s, i) => R.text(ctx, s, 145, 140 + i * 22, 15, { outline: false }));
-      ctx.fillStyle = 'rgba(0,0,0,0.85)'; R.roundRect(ctx, 170, 316, 250, 118, 8); ctx.fill();
+      ctx.fillStyle = 'rgba(0,0,0,0.85)'; R.roundRect(ctx, 150, 316, 290, 148, 8); ctx.fill();
       ctx.strokeStyle = '#ddd'; ctx.lineWidth = 2; ctx.stroke();
       MENU.forEach(([s, y]) => {
-        const hot = inRect(mx, my, [170, y - 22, 250, 30]);
-        R.text(ctx, s, 218, y + 8, 21, { outline: false, color: hot ? '#ffd23a' : '#fff' });
+        const hot = inRect(mx, my, [150, y - 22, 290, 30]);
+        R.text(ctx, s, 295, y + 8, 21, { align: 'center', outline: false, color: hot ? '#ffd23a' : '#fff' });
       });
+      const p = AC.profile;
+      R.text(ctx, p ? 'Niv. ' + p.level + '   ·   Elo ' + p.elo + (p.points ? '   ·   ' + p.points + ' point(s) à placer !' : '')
+        : 'Invité : connectez-vous pour progresser', 295, 488, 14, { align: 'center', color: p && p.points ? '#ffd23a' : '#fff' });
       R.text(ctx, 'remake', 580, 590, 12, { align: 'right', outline: false, color: 'rgba(255,255,255,0.7)' });
     },
     onClick(x, y) {
-      const i = MENU.findIndex(([, my2]) => inRect(x, y, [170, my2 - 22, 250, 30]));
+      const i = MENU.findIndex(([, my2]) => inRect(x, y, [150, my2 - 22, 290, 30]));
       if (i < 0) return;
       A.play('click'); A.stopMusic();
-      if (i === 0) go(Edit());
-      else if (i === 1) { data.kaisen = 0; data.match_mode = 1; data.result_txt = []; go(Select()); }
-      else go(Lobby());
+      if (i === 0) go(Lobby({ quick: true }));
+      else if (i === 1) startTournament();
+      else if (i === 2) go(Lobby({}));
+      else go(Leaderboard());
     },
   };
 
-  // ---------- exhibition stats ----------
-  const STATS = ['Forehand', 'Backhand', 'Serve', 'Footwork'];
-  function Edit() {
-    // COM (player 1) bars at the top, YOU (player 0) below; random stats as in the original.
-    const rows = [];
-    for (let i = 0; i < 2; i++) for (let j = 0; j < 4; j++) {
-      data.player_data[i][j] = Math.floor((Math.random() * 10 + Math.random() * 10 + Math.random() * 10) / 3);
-      rows.push({ i, j, x: i === 1 ? 183 : 283, y: (i === 1 ? 85 : 265) + j * 30 });
-    }
-    const sp = spaceClip(() => { A.stopMusic(); data.match_mode = 0; startSolo(); });
-    return {
-      enter() { A.playMusic('start'); },
-      tick() { sp.tick(); },
-      onKey(k) { sp.key(k); },
-      onClick(x, y) {
-        for (const r of rows) if (inRect(x, y, [r.x, r.y, 206, 22])) {
-          data.player_data[r.i][r.j] = Math.max(0, Math.min(9, Math.floor((x - r.x) / 20)));
-        }
-      },
-      draw() {
-        R.drawScene(ctx); R.panel(ctx);
-        for (const r of rows) {
-          R.text(ctx, STATS[r.j], r.x - 101, r.y + 18, 18, { outline: false });
-          R.bar(ctx, r.x, r.y, data.player_data[r.i][r.j]);
-        }
-        R.drawPlayer(ctx, 470, 160, 1.1, 'fore', 9, 'front', 1);
-        R.text(ctx, 'COM', 472, 203, 26, { align: 'center', outline: false });
-        R.drawPlayer(ctx, 115, 400, 1.1, 'smash', 4, 'back', 0, AC.look());
-        R.text(ctx, 'YOU', 112, 288, 26, { align: 'center', outline: false });
-        R.spaceButton(ctx, 290, 494, sp.f);
-      },
-    };
+  // ---------- tournament: you (your unlocked abilities) against 15 players of the original roster ----------
+  function startTournament() {
+    const p = AC.profile, stats = p ? p.stats : PG.START_STATS;
+    const me = stats.join('') + '00' + (p ? p.name : 'YOU');
+    const roster = L.TDAT.slice();
+    for (let i = roster.length - 1; i > 0; i--) { const r = Math.floor(Math.random() * (i + 1)); [roster[i], roster[r]] = [roster[r], roster[i]]; }
+    Object.assign(data, { tdat: [me].concat(roster.slice(0, 15)), kaisen: 0, match_mode: 1, result_txt: [] });
+    go(Bracket());
   }
 
-  // ---------- tournament: player select ----------
-  function Select() {
-    let over = -1;
-    const pos = (n) => [n < 8 ? 122 : 352, 115 + (n % 8) * 30];
+  // ---------- ranking ----------
+  function Leaderboard() {
+    let board = null, err = '';
+    fetch('/api/leaderboard').then((r) => r.json()).then((j) => { board = j; }).catch(() => { err = 'Classement indisponible'; });
+    const BTN_BACK = [230, 530, 130, 32];
     return {
-      tick() {
-        over = -1;
-        for (let n = 0; n < 16; n++) { const [x, y] = pos(n); if (inRect(mx, my, [x - 4, y - 20, 140, 26])) over = n; }
-      },
-      onClick() {
-        if (over < 0) return;
-        A.play('click');
-        // tdat_shuffle: chosen player to slot 0, others shuffled.
-        const t = data.tdat;
-        if (over > 0) { const tmp = t[over]; t[over] = t[0]; t[0] = tmp; }
-        for (let i = 1; i < 16; i++) { const r = 1 + Math.floor(Math.random() * 15); const tmp = t[i]; t[i] = t[r]; t[r] = tmp; }
-        go(Bracket());
-      },
+      tick() {},
       draw() {
         R.drawScene(ctx); R.panel(ctx);
-        R.text(ctx, 'Select your player', 300, 70, 30, { align: 'center', outline: false });
-        for (let n = 0; n < 16; n++) {
-          const [x, y] = pos(n);
-          R.text(ctx, tname(data.tdat[n]), x, y, 19, { outline: false, color: n === over ? '#ffd23a' : '#fff' });
+        R.text(ctx, 'CLASSEMENT', 300, 66, 32, { align: 'center', outline: false });
+        R.text(ctx, 'Elo gagné en partie rapide', 300, 90, 14, { align: 'center', outline: false, color: '#ccc' });
+        const cols = [[80, '#', 'left'], [115, 'Pseudo', 'left'], [355, 'Niv.', 'right'], [425, 'V - D', 'right'], [505, 'Elo', 'right']];
+        cols.forEach(([x, h, al]) => R.text(ctx, h, x, 122, 14, { align: al, outline: false, color: '#9ad0ff' }));
+        if (!board) R.text(ctx, err || 'Chargement...', 300, 250, 18, { align: 'center', outline: false });
+        else if (!board.top.length) R.text(ctx, 'Personne pour le moment : à vous de jouer !', 300, 250, 17, { align: 'center', outline: false });
+        const me = AC.profile && AC.profile.name;
+        const row = (r, y, hl) => {
+          const c = hl ? '#ffd23a' : '#fff';
+          R.text(ctx, String(r.rank), 80, y, 15, { outline: false, color: c });
+          R.text(ctx, r.name, 115, y, 15, { outline: false, color: c });
+          R.text(ctx, String(r.level), 355, y, 15, { align: 'right', outline: false, color: c });
+          R.text(ctx, r.wins + ' - ' + r.losses, 425, y, 15, { align: 'right', outline: false, color: c });
+          R.text(ctx, String(r.elo), 505, y, 15, { align: 'right', outline: false, color: c });
+        };
+        if (board) {
+          board.top.forEach((r, i) => row(r, 140 + i * 17.5, r.name === me));
+          if (board.me && board.me.rank > board.top.length) row(board.me, 140 + 20 * 17.5 + 8, true);
         }
-        if (over >= 0) {
-          const d = digits(data.tdat[over]);
-          for (let j = 0; j < 4; j++) { R.text(ctx, STATS[j], 132, 422 + j * 30, 18, { outline: false }); R.bar(ctx, 233, 405 + j * 30, d[j]); }
-        }
+        const hot = inRect(mx, my, BTN_BACK);
+        ctx.fillStyle = hot ? '#ffd23a' : '#f2f2f2'; R.roundRect(ctx, BTN_BACK[0], BTN_BACK[1], BTN_BACK[2], BTN_BACK[3], 8); ctx.fill();
+        R.text(ctx, 'RETOUR', 295, 553, 20, { align: 'center', outline: false, color: '#222' });
       },
+      onClick(x, y) { if (inRect(x, y, BTN_BACK)) go(Title); },
+      onKey(k) { if (k === 'Escape') go(Title); },
     };
   }
 
@@ -338,10 +322,12 @@
   const shareLink = (code) => location.origin + location.pathname + '#' + code;
 
   // ---------- online lobby ----------
-  function Lobby(autoCode) {
+  // opts.quick: ranked matchmaking right away; otherwise host / join a private room (opts.code: invite link).
+  function Lobby(opts) {
+    const quick = !!opts.quick, autoCode = opts.code;
     // mode: null | 'quick' (matchmaking) | 'private' (room created, waiting) | 'code' (typing a code)
     let mode = null, status = '', copied = 0, searchT0 = 0;
-    const BTN_QUICK = [150, 130, 300, 40], BTN_CREATE = [150, 185, 300, 40], BTN_JOIN = [150, 240, 300, 40];
+    const BTN_CREATE = [150, 150, 300, 40], BTN_JOIN = [150, 205, 300, 40];
     const BTN_GO = [235, 395, 130, 36], BTN_COPY = [205, 420, 190, 30], BTN_BACK = [230, 520, 130, 32];
     netOn();
     addr.value = '';
@@ -356,7 +342,14 @@
       send();
     }
     const self = {
-      enter() { if (autoCode) joinCode(autoCode); },
+      enter() {
+        if (autoCode) joinCode(autoCode);
+        if (quick) {
+          mode = 'quick'; searchT0 = performance.now();
+          const send = () => { if (scene !== self) return; if (sess.ws.readyState === 1) sess.quick(); else setTimeout(send, 100); };
+          send();
+        }
+      },
       tick() {
         if (!sess) return;
         if (copied) copied--;
@@ -367,21 +360,25 @@
         }
         if (sess.ws.readyState !== 1) status = 'Connexion au serveur...';
         else if (status === 'Connexion au serveur...') status = '';
-        if (sess.code && mode === 'quick') status = "Recherche d'un adversaire... " + Math.floor((performance.now() - searchT0) / 1000) + ' s';
         if (sess.code && (mode === 'private' || mode === 'joining')) { mode = 'private'; status = "En attente de l'adversaire..."; }
       },
       draw() {
         R.drawScene(ctx); R.panel(ctx);
-        R.text(ctx, '2 PLAYERS EN LIGNE', 300, 80, 32, { align: 'center', outline: false });
+        R.text(ctx, quick ? 'PARTIE RAPIDE' : 'HÉBERGER / REJOINDRE', 300, 80, 32, { align: 'center', outline: false });
         const btn = (r, s, size) => {
           const hot = inRect(mx, my, r);
           ctx.fillStyle = hot ? '#ffd23a' : '#f2f2f2'; R.roundRect(ctx, r[0], r[1], r[2], r[3], 8); ctx.fill();
           R.text(ctx, s, r[0] + r[2] / 2, r[1] + r[3] / 2 + (size || 20) * 0.35, size || 20, { align: 'center', outline: false, color: '#222' });
         };
-        btn(BTN_QUICK, 'PARTIE RAPIDE'); btn(BTN_CREATE, 'CRÉER UNE PARTIE PRIVÉE', 18); btn(BTN_JOIN, 'REJOINDRE AVEC UN CODE', 18);
-        if (mode === 'quick') {
-          R.text(ctx, 'Vous jouerez contre le prochain joueur', 300, 330, 17, { align: 'center', outline: false });
-          R.text(ctx, 'qui clique sur PARTIE RAPIDE.', 300, 354, 17, { align: 'center', outline: false });
+        if (!quick) {
+          btn(BTN_CREATE, 'CRÉER UNE PARTIE PRIVÉE', 18); btn(BTN_JOIN, 'REJOINDRE AVEC UN CODE', 18);
+          R.text(ctx, 'Partie amicale : chacun joue avec ses capacités, sans Elo ni XP.', 300, 276, 13, { align: 'center', outline: false, color: '#ccc' });
+        } else {
+          const p = AC.profile;
+          R.text(ctx, "Recherche d'un adversaire...", 300, 230, 24, { align: 'center', outline: false });
+          R.text(ctx, Math.floor((performance.now() - searchT0) / 1000) + ' s', 300, 275, 30, { align: 'center', outline: false, color: '#ffd23a' });
+          R.text(ctx, p ? 'Partie classée : Elo ' + p.elo + ', +' + PG.XP_WIN + ' XP en cas de victoire'
+            : "En invité, rien n'est enregistré : connectez-vous pour progresser.", 300, 330, 14, { align: 'center', outline: false, color: '#ccc' });
         }
         if (mode === 'private' && sess && sess.code) {
           R.text(ctx, 'Code de la partie :', 300, 318, 17, { align: 'center', outline: false });
@@ -400,7 +397,7 @@
       onClick(x, y) {
         if (inRect(x, y, BTN_BACK)) { netOff(); return go(Title); }
         if (!sess) return;
-        if (inRect(x, y, BTN_QUICK)) { A.play('click'); addr.style.display = 'none'; mode = 'quick'; status = ''; searchT0 = performance.now(); sess.quick(); return; }
+        if (quick) return;
         if (inRect(x, y, BTN_CREATE)) { A.play('click'); addr.style.display = 'none'; mode = 'private'; status = ''; sess.create(); return; }
         if (inRect(x, y, BTN_JOIN)) {
           A.play('click'); if (sess.code) sess.leave();
@@ -423,15 +420,24 @@
 
   // ---------- online match ----------
   function startNet() {
-    let prev = null, intro = 75;  // "VS" banner for the first 2.5 s
+    let prev = null, intro = 75, wasOver = false, levelUp = 0;  // "VS" banner for the first 2.5 s
     sess.onEvents = (ev) => ev.forEach((e) => A.play(e));
-    sess.onProfile = (p) => AC.update(p);
-    const leave = () => { sess.onEvents = null; netOff(); go(Title); };
+    sess.onProfile = (p) => { const old = AC.profile; if (old && p.level > old.level) levelUp = p.level; AC.update(p); };
+    let confirmQuit = 0;  // a ranked match left before the end is lost: ask twice
+    const leave = () => {
+      const g = sess.view;
+      if (sess.isPublic && g && !g.over && !sess.closed && !confirmQuit) { confirmQuit = 90; return; }
+      sess.onEvents = null; netOff(); go(Title);
+    };
     go({
       tick() {
         prev = sess.view ? snapPos(sess.view) : null;
         sess.tick(readPad());
         if (intro > 0 && sess.view) intro--;
+        const over = !!(sess.view && sess.view.over);
+        if (wasOver && !over) { sess.result = null; levelUp = 0; }  // rematch started
+        wasOver = over;
+        if (confirmQuit) confirmQuit--;
       },
       draw(alpha) {
         const g = sess.view;
@@ -442,13 +448,14 @@
           ctx.globalAlpha = Math.min(1, intro / 15);
           ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 200, 600, 100);
           R.text(ctx, 'Adversaire trouvé !', 300, 236, 22, { align: 'center', color: '#9ad0ff' });
-          R.text(ctx, 'VS  ' + opp.name, 300, 280, 34, { align: 'center', color: '#ffd23a' });
+          R.text(ctx, 'VS  ' + opp.name, 300, 276, 34, { align: 'center', color: '#ffd23a' });
+          if (opp.elo != null) R.text(ctx, 'Elo ' + opp.elo + '   ·   Niv. ' + opp.level, 300, 296, 14, { align: 'center' });
           ctx.globalAlpha = 1;
         }
         const rtt = sess.rtt;
         R.text(ctx, 'VOUS : P' + (sess.me + 1) + (rtt != null ? '  ping ' + Math.round(rtt) + ' ms' : ''), 8, 20, 14);
         let msg = null;
-        if (sess.closed) msg = "L'adversaire a quitté la partie";
+        if (sess.closed) msg = "L'adversaire a quitté la partie" + (sess.result ? ' : victoire !' : '');
         else if (sess.lost) msg = 'Connexion perdue - reconnexion...';
         else if (sess.paused) msg = sess.peerOn ? 'Pause - en attente...' : 'Adversaire déconnecté - pause';
         if (msg) {
@@ -456,7 +463,17 @@
           R.text(ctx, msg, 300, 302, 24, { align: 'center' });
           R.text(ctx, 'Échap : menu', 300, 328, 15, { align: 'center' });
         }
-        if (g.over) R.text(ctx, 'Espace : revanche   -   Échap : menu', 300, 380, 18, { align: 'center' });
+        if (confirmQuit) {
+          ctx.fillStyle = 'rgba(160,0,0,0.75)'; ctx.fillRect(0, 350, 600, 60);
+          R.text(ctx, 'Quitter maintenant = défaite.', 300, 376, 22, { align: 'center' });
+          R.text(ctx, 'Échap à nouveau pour confirmer', 300, 400, 15, { align: 'center' });
+        }
+        if (g.over) {
+          R.text(ctx, 'Espace : revanche   -   Échap : menu', 300, 380, 18, { align: 'center' });
+          const r = sess.result;
+          if (r) R.text(ctx, (r.elo >= 0 ? '+' : '') + r.elo + ' Elo   ·   +' + r.xp + ' XP', 300, 420, 22, { align: 'center', color: r.elo >= 0 ? '#7dff8a' : '#ff8a80' });
+          if (levelUp) R.text(ctx, 'NIVEAU ' + levelUp + ' ! Un point de capacité à placer (compte)', 300, 452, 16, { align: 'center', color: '#ffd23a' });
+        }
       },
       onClick(x, y) { if (inRect(x, y, QUIT)) leave(); },
       onKey(k) { if (k === 'Escape') leave(); },

@@ -2,7 +2,7 @@
 // The session lives in an HttpOnly cookie set by the server; this module only keeps the profile.
 (function (root) {
   'use strict';
-  const R = root.TennisRender, CO = root.TennisCosmetics;
+  const R = root.TennisRender, CO = root.TennisCosmetics, PG = root.TennisProgression;
   const $ = (id) => document.getElementById(id);
   let profile = null, clientId = null, gisLoaded = null, draft = null;
   const listeners = [];
@@ -17,7 +17,7 @@
   }
   function setProfile(p) {
     profile = p || null;
-    $('acct-btn').textContent = profile ? profile.name : 'Se connecter';
+    $('acct-btn').textContent = profile ? profile.name + '  ·  ' + profile.elo + (profile.points ? '  ·  +' + profile.points : '') : 'Se connecter';
     $('acct-btn').classList.toggle('in', !!profile);
     listeners.forEach((f) => f(profile));
   }
@@ -80,6 +80,24 @@
       box.appendChild(b);
     }
   }
+  // Ability bars with -/+ : points come from levels; reallocating is free (the server re-checks).
+  function abilities() {
+    const left = PG.points(profile.xp) - PG.spent(draft.stats);
+    $('acct-points').textContent = left ? left + ' point(s) à placer' : '';
+    const box = $('acct-abil');
+    box.innerHTML = '';
+    PG.NAMES.forEach((name, i) => {
+      const v = draft.stats[i], row = document.createElement('div');
+      row.className = 'ab';
+      const pips = Array.from({ length: PG.MAX }, (_, k) => '<i class="' + (k < v ? 'on' : '') + '"></i>').join('');
+      row.innerHTML = '<span>' + name + '</span><b>' + pips + '</b><button aria-label="Retirer">−</button><button aria-label="Ajouter">+</button>';
+      const [minus, plus] = row.querySelectorAll('button');
+      minus.disabled = v <= PG.BASE; plus.disabled = v >= PG.MAX || left <= 0;
+      minus.onclick = () => { draft.stats[i]--; abilities(); };
+      plus.onclick = () => { draft.stats[i]++; abilities(); };
+      box.appendChild(row);
+    });
+  }
   function preview() {
     const c = $('acct-preview'), g = c.getContext('2d'), dpr = window.devicePixelRatio || 1;
     c.width = 120 * dpr; c.height = 150 * dpr;
@@ -91,13 +109,18 @@
   function showProfile() {
     $('acct-login').style.display = 'none'; $('acct-profile').style.display = 'block';
     $('acct-title').textContent = 'Mon compte';
-    draft = { name: profile.name, look: CO.sanitize(profile.look, 0) };
+    draft = { name: profile.name, look: CO.sanitize(profile.look, 0), stats: profile.stats.slice() };
     $('acct-name').value = draft.name;
     $('acct-stats').textContent = 'Victoires : ' + profile.wins + '   ·   Défaites : ' + profile.losses;
-    swatches('cloth'); swatches('hair'); preview();
+    $('acct-level').textContent = 'Niveau ' + profile.level + '   ·   Elo ' + profile.elo + (profile.rank ? '   ·   #' + profile.rank + ' au classement' : '');
+    $('acct-xp').style.width = Math.round(100 * profile.into / profile.need) + '%';
+    $('acct-xptxt').textContent = profile.into + ' / ' + profile.need + ' XP';
+    swatches('cloth'); swatches('hair'); preview(); abilities();
     $('acct-save').onclick = async () => {
       try {
-        setProfile((await call('/api/profile', { name: $('acct-name').value, look: draft.look })).profile);
+        let p = (await call('/api/profile', { name: $('acct-name').value, look: draft.look })).profile;
+        if (draft.stats.join() !== profile.stats.join()) p = (await call('/api/stats', { stats: draft.stats })).profile;
+        setProfile(p); showProfile();
         msg('Enregistré', true);
       } catch (e) { msg(e.message); }
     };

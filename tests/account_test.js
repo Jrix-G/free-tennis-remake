@@ -74,7 +74,40 @@ const login = async (sub) => post('/api/login', { credential: idToken({ sub, ema
     s.quick();
     for (let i = 0; i < 100 && !s.started; i++) await sleep(20);
     assert.ok(s.started, 'bot match started');
-    assert.deepStrictEqual(s.players[0], { name: 'Ace Lucas', look: { cloth: 'red', hair: 'brown' } });
+    assert.deepStrictEqual(s.players[0], { name: 'Ace Lucas', look: { cloth: 'red', hair: 'brown' }, elo: 1000, level: 1 });
+    const bot = s.players[1];
+    assert.ok(Math.abs(bot.elo - 1000) <= 60 && bot.level >= 1, 'bot rating close to the player');
+    await sleep(100);
+    assert.deepStrictEqual(s.server.P[0].forehand, 20 + 3, 'starting abilities are 3 everywhere');
+
+    // quitting a ranked match is a loss: Elo down, +40 XP
+    s.leave();
+    await sleep(200);
+    let me = (await get('/api/me', a.cookie)).profile;
+    assert.ok(me.losses === 1 && me.elo < 1000 && me.xp === 40 && me.level === 1 && me.points === 0, 'forfeit recorded: ' + JSON.stringify(me));
+    assert.strictEqual((await post('/api/stats', { stats: [4, 3, 3, 3] }, a.cookie)).status, 400, 'no point to spend yet');
+
+    // second forfeit: 80 XP -> level 2 -> one point
+    s.quick();
+    for (let i = 0; i < 100 && !s.started; i++) await sleep(20);
+    s.leave();
+    await sleep(200);
+    me = (await get('/api/me', a.cookie)).profile;
+    assert.ok(me.level === 2 && me.points === 1, 'level 2 gives a point: ' + JSON.stringify(me));
+    assert.strictEqual((await post('/api/stats', { stats: [5, 3, 3, 3] }, a.cookie)).status, 400, 'cannot spend two points');
+    assert.strictEqual((await post('/api/stats', { stats: [2, 3, 3, 4] }, a.cookie)).status, 400, 'cannot go below 3');
+    const st = await post('/api/stats', { stats: [3, 3, 3, 4] }, a.cookie);
+    assert.ok(st.status === 200 && st.json.profile.points === 0 && st.json.profile.stats[3] === 4, 'point spent on footwork');
+    assert.ok((await post('/api/stats', { stats: [4, 3, 3, 3] }, a.cookie)).status === 200, 'free respec');
+
+    // the new abilities are used in the next match; the leaderboard lists the player
+    s.quick();
+    for (let i = 0; i < 100 && !s.started; i++) await sleep(20);
+    await sleep(100);
+    assert.strictEqual(s.server.P[0].forehand, 20 + 4, 'unlocked forehand used in game');
+    const lb = await get('/api/leaderboard', a.cookie);
+    assert.ok(lb.top.some((r) => r.name === 'Ace Lucas') && lb.me.rank >= 1, 'listed in the ranking');
+    s.leave();
     ws.close();
 
     // logout ends the session

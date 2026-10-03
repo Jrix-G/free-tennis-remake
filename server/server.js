@@ -13,6 +13,7 @@ const path = require('path');
 const crypto = require('crypto');
 const L = require('../web/game.js');
 const CO = require('../web/cosmetics.js');
+const PG = require('../web/progression.js');
 const bots = require('./bots.js');
 const { verifyGoogleToken } = require('./auth.js');
 const { open: openDb, publicProfile } = require('./db.js');
@@ -25,7 +26,6 @@ const TICK_MS = Number(arg('tick-ms', 1000 / 30));  // tests run the clock faste
 const MAX_QUEUE = 4;          // inputs buffered per player; older ones are dropped beyond that
 const STALE_MS = 1500;        // no input for that long (hidden tab...) -> pause
 const RECONNECT_MS = 60000;   // a dropped player keeps their slot that long
-const BALANCED = [5, 5, 5, 5, 0, 0];
 const BOT_WAIT_MS = Number(arg('bot-wait-ms', 5000));  // quick match: search time before a bot steps in
 // Google OAuth client id (public, not a secret). Without it, accounts are disabled and everyone plays as a guest.
 const GOOGLE_CLIENT_ID = arg('google-client-id', process.env.GOOGLE_CLIENT_ID || '');
@@ -122,18 +122,19 @@ class Room {
     rooms.set(this.code, this);
   }
   newMatch() {
-    const [a, b] = this.slots;
+    const [a, b] = this.slots;  // everyone plays with their own unlocked abilities
     this.G = L.createMatch({
-      names: [a.name, b.name], data: [BALANCED, b.bot ? b.stats : BALANCED], ctrl: ['human', b.bot ? 'ai' : 'human'],
+      names: [a.name, b.name], data: [PG.matchData(a.stats), PG.matchData(b.stats)], ctrl: ['human', b.bot ? 'ai' : 'human'],
       matchMode: 0, seed: crypto.randomInt(2 ** 32 - 1) + 1,
     });
-    this.prevOverSp = [true, true]; this.wasOver = false;
+    this.prevOverSp = [true, true]; this.wasOver = false; this.recorded = false;
   }
   attach(ws, idx, token) {
     let s = this.slots[idx];
     if (!s) s = this.slots[idx] = { token: token || crypto.randomBytes(9).toString('base64url'), queue: [], last: {}, ack: 0 };
     if (s.ws && s.ws !== ws) { s.ws.room = null; s.ws.close(); }  // a newer tab takes the slot
-    Object.assign(s, { ws, goneAt: 0, lastInput: Date.now(), queue: [], name: ws.name, look: ws.look, userId: ws.userId });
+    Object.assign(s, { ws, goneAt: 0, lastInput: Date.now(), queue: [], name: ws.name, look: ws.look, userId: ws.userId,
+      stats: ws.stats, elo: ws.elo, level: ws.level });
     ws.room = this; ws.idx = idx;
     ws.send({ t: 'room', code: this.code, me: idx, token: s.token, public: this.isPublic });
     if (this.slots[0] && this.slots[1] && !this.started) this.start();
@@ -144,12 +145,14 @@ class Room {
     for (const s of this.slots) if (!s.bot) s.lastInput = Date.now();
   }
   addBot() {
-    this.slots[1] = { bot: true, name: bots.botName(), look: bots.botLook(), stats: bots.botStats(), queue: [], last: {}, ack: 0 };
+    const h = this.slots[0];
+    this.slots[1] = Object.assign({ bot: true, name: bots.botName(), look: bots.botLook(), queue: [], last: {}, ack: 0 },
+      bots.botFor(h.stats, h.elo, h.level));
     if (quickRoom === this) quickRoom = null;
     this.start(); this.notify();
   }
   notify() {
-    const players = this.slots.map((s) => (s ? { name: s.name, look: s.look } : null));
+    const players = this.slots.map((s) => (s ? { name: s.name, look: s.look, elo: s.elo, level: s.level } : null));
     for (let i = 0; i < 2; i++) {
       const s = this.slots[i], o = this.slots[1 - i];
       if (s && s.ws) s.ws.send({ t: 'peer', on: !!(o && (o.ws || o.bot)), started: this.started, players });
@@ -162,7 +165,8 @@ class Room {
     if (!this.started) return this.close();
     this.notify();
   }
-  leave(ws) {  // explicit quit: the opponent is told and the room ends
+  leave(ws) {  // explicit quit: the opponent is told and the room ends; quitting a ranked match loses it
+    if (this.started && !this.G.over) this.record(1 - ws.idx);
     const o = this.slots[1 - ws.idx];
     ws.room = null;
     if (o && o.ws) { o.ws.send({ t: 'closed' }); o.ws.room = null; }
@@ -194,7 +198,9 @@ class Room {
       if (this.botAt && now >= this.botAt && this.slots[0] && this.slots[0].ws && !this.slots[1]) this.addBot();
       else return;
     }
-    if (this.slots.some((s) => s && !s.bot && !s.ws && now - s.goneAt > RECONNECT_MS)) {
+    const gone = this.slots.findIndex((s) => s && !s.bot && !s.ws && now - s.goneAt > RECONNECT_MS);
+    if (gone >= 0) {
+      if (!this.G.over) this.record(1 - gone);  // never came back: forfeit
       for (const s of this.slots) if (s && s.ws) s.ws.send({ t: 'closed' });
       return this.close();
     }
@@ -217,7 +223,7 @@ class Room {
       } else this.prevOverSp = [true, true];
       L.step(this.G, pads);
       ev = this.G.events;
-      if (this.G.over && !this.wasOver) this.record();
+      if (this.G.over && !this.wasOver) this.record(this.G.match_winner);
       this.wasOver = this.G.over;
     }
     const g = JSON.stringify(this.G);
@@ -226,13 +232,24 @@ class Room {
       if (s && s.ws) s.ws.send('{"t":"snap","paused":' + paused + ',"ack":' + s.ack + ',"ev":' + JSON.stringify(ev) + ',"g":' + g + '}');
     }
   }
-  record() {  // win / loss on the accounts of logged-in players
+  // Ranked (quick match) result for logged-in players: W/L, XP, Elo. Guests count as 1000.
+  record(winner) {
+    if (!this.isPublic || this.recorded) return;
+    this.recorded = true;
+    const ratings = this.slots.map((s) => (s.elo == null ? PG.START_ELO : s.elo));
+    const next = PG.elo(ratings[0], ratings[1], winner === 0 ? 1 : 0);
     this.slots.forEach((s, i) => {
-      if (!s.userId) return;
-      db.recordResult(s.userId, this.G.match_winner === i);
+      if (s.bot || !s.userId) return;
+      db.recordResult(s.userId, winner === i, next[i]);
       const u = db.user(s.userId);
-      if (u && s.ws) s.ws.send({ t: 'profile', profile: publicProfile(u) });
+      s.elo = u.elo; s.level = PG.level(u.xp).level;
+      if (s.ws) {
+        s.ws.send({ t: 'result', won: winner === i, elo: next[i] - ratings[i], xp: winner === i ? PG.XP_WIN : PG.XP_LOSS });
+        s.ws.send({ t: 'profile', profile: profileOf(u) });
+      }
     });
+    const b = this.slots.find((s) => s.bot);
+    if (b) b.elo = next[this.slots.indexOf(b)];
   }
 }
 
@@ -290,10 +307,14 @@ function identify(ws, user) {
   ws.userId = user ? user.id : 0;
   ws.name = user ? user.name : ws.name || 'Invité' + crypto.randomInt(1000, 10000);
   ws.look = user ? JSON.parse(user.look) : CO.sanitize({}, 0);
+  ws.stats = user ? JSON.parse(user.stats) : PG.START_STATS.slice();  // guests keep the starting abilities
+  ws.elo = user ? user.elo : null;
+  ws.level = user ? PG.level(user.xp).level : null;
 }
+const profileOf = (u) => Object.assign(publicProfile(u), { rank: db.rank(u) });
 function refreshUser(id) {  // profile edited or logged in elsewhere: update open sockets
   const u = db.user(id);
-  for (const ws of clients) if (ws.userId === id) { identify(ws, u); ws.send({ t: 'profile', profile: publicProfile(u) }); }
+  for (const ws of clients) if (ws.userId === id) { identify(ws, u); ws.send({ t: 'profile', profile: profileOf(u) }); }
 }
 
 // ---------- HTTP ----------
@@ -320,7 +341,11 @@ function sessionCookie(req, token, maxAge) {
 async function api(req, res, pathname) {
   const user = db.userBySession(cookieToken(req));
   if (pathname === '/api/config' && req.method === 'GET') return json(res, 200, { googleClientId: GOOGLE_CLIENT_ID || null });
-  if (pathname === '/api/me' && req.method === 'GET') return json(res, 200, { profile: user ? publicProfile(user) : null });
+  if (pathname === '/api/me' && req.method === 'GET') return json(res, 200, { profile: user ? profileOf(user) : null });
+  if (pathname === '/api/leaderboard' && req.method === 'GET') {
+    const row = (u, rank) => ({ rank, name: u.name, elo: u.elo, wins: u.wins, losses: u.losses, level: PG.level(u.xp).level, look: JSON.parse(u.look) });
+    return json(res, 200, { top: db.leaderboard(20).map((u, i) => row(u, i + 1)), me: user && db.rank(user) ? row(user, db.rank(user)) : null });
+  }
   if (req.method !== 'POST') return json(res, 405, { error: 'method' });
   let body;
   try { body = await readJson(req); } catch (e) { return json(res, 400, { error: 'Requête invalide' }); }
@@ -332,7 +357,7 @@ async function api(req, res, pathname) {
     }
     const u = db.loginGoogle(claims.sub, claims.email);
     const token = db.createSession(u.id);
-    return json(res, 200, { profile: publicProfile(u) }, { 'Set-Cookie': sessionCookie(req, token, 365 * 86400) });
+    return json(res, 200, { profile: profileOf(u) }, { 'Set-Cookie': sessionCookie(req, token, 365 * 86400) });
   }
   if (pathname === '/api/logout') {
     db.dropSession(cookieToken(req));
@@ -343,7 +368,14 @@ async function api(req, res, pathname) {
     const err = db.updateProfile(user.id, body.name, body.look);
     if (err) return json(res, 400, { error: err });
     refreshUser(user.id);
-    return json(res, 200, { profile: publicProfile(db.user(user.id)) });
+    return json(res, 200, { profile: profileOf(db.user(user.id)) });
+  }
+  if (pathname === '/api/stats') {
+    if (!user) return json(res, 401, { error: 'Non connecté' });
+    const err = db.setStats(user.id, body.stats);
+    if (err) return json(res, 400, { error: err });
+    refreshUser(user.id);
+    return json(res, 200, { profile: profileOf(db.user(user.id)) });
   }
   return json(res, 404, { error: 'not found' });
 }

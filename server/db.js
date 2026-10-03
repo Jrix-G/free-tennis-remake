@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const CO = require('../web/cosmetics.js');
+const PG = require('../web/progression.js');
 
 const SESSION_DAYS = 365;
 const NAME_RE = /^[A-Za-z0-9À-ÿ_.\- ]{3,16}$/;
@@ -31,6 +32,11 @@ function open(file) {
       expires_at INTEGER NOT NULL
     );
   `);
+  // columns added after the first release
+  const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!cols.includes('elo')) db.exec('ALTER TABLE users ADD COLUMN elo INTEGER NOT NULL DEFAULT ' + PG.START_ELO);
+  if (!cols.includes('xp')) db.exec('ALTER TABLE users ADD COLUMN xp INTEGER NOT NULL DEFAULT 0');
+  if (!cols.includes('stats')) db.exec("ALTER TABLE users ADD COLUMN stats TEXT NOT NULL DEFAULT '" + JSON.stringify(PG.START_STATS) + "'");
   const q = {
     bySub: db.prepare('SELECT * FROM users WHERE google_sub = ?'),
     byId: db.prepare('SELECT * FROM users WHERE id = ?'),
@@ -38,8 +44,10 @@ function open(file) {
     insert: db.prepare('INSERT INTO users (google_sub, email, name, name_key, look, created_at) VALUES (?, ?, ?, ?, ?, ?)'),
     setEmail: db.prepare('UPDATE users SET email = ? WHERE id = ?'),
     setProfile: db.prepare('UPDATE users SET name = ?, name_key = ?, look = ? WHERE id = ?'),
-    win: db.prepare('UPDATE users SET wins = wins + 1 WHERE id = ?'),
-    loss: db.prepare('UPDATE users SET losses = losses + 1 WHERE id = ?'),
+    result: db.prepare('UPDATE users SET wins = wins + ?, losses = losses + ?, xp = xp + ?, elo = ? WHERE id = ?'),
+    setStats: db.prepare('UPDATE users SET stats = ? WHERE id = ?'),
+    top: db.prepare('SELECT * FROM users WHERE wins + losses > 0 ORDER BY elo DESC, wins DESC, id LIMIT ?'),
+    rank: db.prepare('SELECT COUNT(*) + 1 AS r FROM users WHERE wins + losses > 0 AND (elo > ? OR (elo = ? AND (wins > ? OR (wins = ? AND id < ?))))'),
     newSession: db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)'),
     session: db.prepare('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?'),
     dropSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
@@ -82,14 +90,30 @@ function open(file) {
       q.setProfile.run(name, name.toLowerCase(), JSON.stringify(CO.sanitize(look, 0)), id);
       return null;
     },
-    recordResult(id, won) { (won ? q.win : q.loss).run(id); },
+    // Ranked result: W/L, XP and the new Elo rating.
+    recordResult(id, won, newElo) {
+      q.result.run(won ? 1 : 0, won ? 0 : 1, won ? PG.XP_WIN : PG.XP_LOSS, newElo, id);
+    },
+    // Returns an error message, or null when saved.
+    setStats(id, stats) {
+      const u = q.byId.get(id);
+      if (!u || !PG.validStats(stats, u.xp)) return 'Répartition de capacités invalide';
+      q.setStats.run(JSON.stringify(stats), id);
+      return null;
+    },
+    leaderboard(limit) { return q.top.all(limit); },
+    rank(u) { return u.wins + u.losses > 0 ? q.rank.get(u.elo, u.elo, u.wins, u.wins, u.id).r : null; },
     close() { db.close(); },
   };
 }
 
 // What the client is allowed to see of a user row.
 function publicProfile(u) {
-  return { name: u.name, look: JSON.parse(u.look), wins: u.wins, losses: u.losses };
+  const lv = PG.level(u.xp), stats = JSON.parse(u.stats);
+  return {
+    name: u.name, look: JSON.parse(u.look), wins: u.wins, losses: u.losses, elo: u.elo, xp: u.xp,
+    level: lv.level, into: lv.into, need: lv.need, stats, points: PG.points(u.xp) - PG.spent(stats),
+  };
 }
 
 module.exports = { open, publicProfile, NAME_RE };
