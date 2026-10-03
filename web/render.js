@@ -74,102 +74,182 @@
   }
 
   // ---------- players ----------
-  // Pose for a right-handed player seen from behind; front view is the mirror image.
-  function pose(anim, af) {
-    const p = { lean: 0, footL: -7, footR: 7, step: 0, hand: [9, -50], rack: -95, off: [-9, -50], bob: 0, head: 0, crouch: 0 };
-    const lerp = (a, b, t) => a + (b - a) * t;
-    const swing = (keys, t) => {           // keys: [[t, angle, hx, hy], ...]
-      for (let i = 1; i < keys.length; i++) if (t <= keys[i][0]) {
-        const a = keys[i - 1], b = keys[i], u = (t - a[0]) / (b[0] - a[0]);
-        p.rack = lerp(a[1], b[1], u); p.hand = [lerp(a[2], b[2], u), lerp(a[3], b[3], u)]; return;
-      }
-      const k = keys[keys.length - 1]; p.rack = k[1]; p.hand = [k[2], k[3]];
-    };
+  // Low-poly, cel-shaded figure modelled on the original sprites (drawn by hand, not copied).
+  // Native size ~98 px, origin at the feet. Poses are for a right-handed player; the far
+  // player (facing 'front') is drawn mirrored.
+  const COL = {
+    skin: '#e9b45a', skinD: '#c08a34', skinL: '#f8dc98',
+    cloth: '#f7f7ef', clothD: '#c3c4d4', hair: ['#9a6a24', '#c8963a'], hairD: '#4a2c0c', hairL: '#efcf7c',
+    frame: '#5a66dc', frameD: '#232867', grip: '#141414', shoeD: '#8c90a8', visor: '#ffffff', lens: '#1c1c2a',
+  };
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  // key: [t, hx, hy, rack, face, len, ox, oy]; returns pose fields interpolated at t.
+  function keyed(p, keys, t) {
+    let a = keys[0], b = keys[0], u = 0;
+    for (let i = 1; i < keys.length; i++) { if (t <= keys[i][0]) { a = keys[i - 1]; b = keys[i]; u = (t - a[0]) / (b[0] - a[0]); break; } a = b = keys[i]; }
+    p.hand = [lerp(a[1], b[1], u), lerp(a[2], b[2], u)]; p.rack = lerp(a[3], b[3], u);
+    p.face = lerp(a[4], b[4], u); p.len = lerp(a[5], b[5], u);
+    if (a.length > 6) p.off = [lerp(a[6], b[6], u), lerp(a[7], b[7], u)];
+  }
+
+  function pose(anim, af, facing) {
+    const front = facing === 'front';
+    const p = { crouch: 0, lean: 0, feet: [[-2, 0], [3, -4.5]], hand: [1, -58], off: [0, -56], rack: -89, face: 0.16, len: 0.66, over: false, head: 0, step: 0, hideArms: !front };
+    if (front) Object.assign(p, { crouch: 12, feet: [[-6, 0], [6, 0]], hand: [2, -34], off: [-3, -40], rack: 92, face: 0.38, len: 0.72 });
+    const t = (n) => (af - 1) / n;
     switch (anim) {
       case 'left': case 'right': {
         const ph = (af - 1) / 13 * Math.PI * 2, d = anim === 'left' ? -1 : 1;
-        p.step = Math.sin(ph) * 7; p.bob = Math.abs(Math.sin(ph)) * 3; p.lean = d * 6; p.crouch = 3;
-        p.hand = [10 + d * 2, -48]; p.rack = -70 + d * 15;
+        p.step = Math.sin(ph); p.crouch += 1 + Math.abs(Math.sin(ph)) * 1.5; p.lean = d * 2;
         break;
       }
       case 'fore':
-        p.crouch = 4; p.footL = -10; p.footR = 10;
-        swing([[0, 20, 16, -46], [0.15, 10, 18, -44], [0.3, -150, -10, -58], [0.55, -175, -14, -66], [1, -95, 9, -50]], (af - 1) / 20);
-        p.lean = p.hand[0] * 0.25;
+        p.crouch = 4; p.feet = [[-5, 0], [5, -1]];
+        keyed(p, [[0, 17, -50, 15, 0.95, 1, -8, -52], [0.15, 13, -53, -25, 1, 1, -9, -54], [0.3, -9, -64, 182, 0.14, 1, -12, -60],
+          [0.6, -11, -65, 186, 0.14, 1, -12, -60], [1, p.hand[0], p.hand[1], p.rack + 360, p.face, p.len, p.off[0], p.off[1]]], t(20));
+        p.over = t(20) > 0.22 && t(20) < 0.8; p.lean = p.hand[0] * 0.2;
         break;
       case 'back':
-        p.crouch = 4; p.footL = -10; p.footR = 10;
-        swing([[0, 170, -16, -46], [0.15, 175, -18, -44], [0.3, -20, 12, -58], [0.55, -5, 14, -66], [1, -95, 9, -50]], (af - 1) / 20);
-        p.off = [p.hand[0] - 4, p.hand[1] + 2]; p.lean = p.hand[0] * 0.25;
+        p.crouch = 4; p.feet = [[-5, 0], [5, -1]];
+        keyed(p, [[0, -17, -50, 165, 0.95, 1, -13, -50], [0.15, -13, -53, 205, 1, 1, -10, -53], [0.3, 9, -64, -2, 0.14, 1, 5, -62],
+          [0.6, 11, -65, -6, 0.14, 1, 6, -62], [1, p.hand[0], p.hand[1], p.rack, p.face, p.len, p.off[0], p.off[1]]], t(20));
+        p.over = t(20) > 0.22 && t(20) < 0.8; p.lean = p.hand[0] * 0.2;
         break;
       case 'smash':
-        swing([[0, -40, 12, -84], [0.2, 0, 10, -90], [0.4, 120, -6, -70], [0.7, 150, -10, -44], [1, 265, 9, -50]], (af - 1) / 16);
-        p.off = [-8, -72];
+        keyed(p, [[0, 9, -86, -60, 0.6, 1, -9, -84], [0.2, 10, -92, -20, 0.9, 1, -8, -80], [0.45, -6, -66, 140, 0.5, 1, -10, -58],
+          [0.7, -10, -48, 160, 0.3, 1, -10, -50], [1, p.hand[0], p.hand[1], p.rack + 360, p.face, p.len, p.off[0], p.off[1]]], t(16));
+        p.over = t(16) > 0.35 && t(16) < 0.85;
         break;
       case 'serve':
-        p.footL = -10; p.footR = 6; p.hand = [14, -42]; p.rack = 70; p.off = [-12, -46];
+        Object.assign(p, { crouch: 11, lean: 6, feet: [[-4, 0], [4, -3]], hand: [17, -38], off: [12, -41], rack: 8, face: 0.95, len: 1, over: true });
         break;
       case 'toss': {
-        const t = Math.min(af, 8) / 8;
-        p.footL = -10; p.footR = 6; p.off = [-8, lerp(-46, -92, t)];
-        p.hand = [lerp(14, 12, t), lerp(-42, -78, t)]; p.rack = lerp(70, -30, t);
+        const u = Math.min(af, 8) / 8;
+        Object.assign(p, { crouch: lerp(6, 1, u), feet: [[-4, 0], [4, -3]], hand: [lerp(13, 11, u), lerp(-46, -44, u)], off: [lerp(8, -3, u), lerp(-49, -102, u)],
+          rack: lerp(12, 38, u), face: 0.9, len: 1, over: true });
         break;
       }
-      case 'win': p.hand = [12, -86]; p.rack = -80; p.off = [-12, -86]; break;
-      case 'lose': p.hand = [10, -40]; p.rack = 95; p.off = [-10, -40]; p.head = 4; p.crouch = 3; break;
+      case 'win': Object.assign(p, { crouch: 0, feet: [[-3.5, 0], [3.5, 0]], hand: [11, -90], off: [-11, -88], rack: -80, face: 0.45, len: 1, over: false }); break;
+      case 'lose': Object.assign(p, { crouch: 3, feet: [[-3, 0], [3.5, 0]], hand: [9, -40], off: [-8, -42], rack: 96, face: 0.35, len: 0.9, head: 4, over: true }); break;
     }
+    if (anim !== 'wait' && anim !== 'left' && anim !== 'right') p.hideArms = false;
+    if (front) p.over = !p.over;
     return p;
   }
 
-  const SKIN = '#f3c9a0', HAIR = ['#6b3d17', '#c99a3a'], OUTLINE = 'rgba(60,60,80,0.6)';
-  function limb(g, x1, y1, x2, y2, w, col) {
-    g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'round';
-    g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+  function poly(g, pts, col) { g.fillStyle = col; g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.fill(); }
+
+  // Tapered limb, shaded on its +x side (light from the upper left).
+  function seg(g, x1, y1, x2, y2, w1, w2, base, dark) {
+    const dx = x2 - x1, dy = y2 - y1, l = Math.hypot(dx, dy) || 1, nx = -dy / l, ny = dx / l;
+    const sgn = nx >= 0 ? 1 : -1;
+    const P1 = [x1 + nx * w1 / 2, y1 + ny * w1 / 2], P2 = [x2 + nx * w2 / 2, y2 + ny * w2 / 2];
+    const M1 = [x1 - nx * w1 / 2, y1 - ny * w1 / 2], M2 = [x2 - nx * w2 / 2, y2 - ny * w2 / 2];
+    poly(g, [P1, P2, M2, M1], base);
+    const S1 = sgn > 0 ? P1 : M1, S2 = sgn > 0 ? P2 : M2;
+    poly(g, [S1, S2, [lerp(S2[0], x2, 0.3), lerp(S2[1], y2, 0.3)], [lerp(S1[0], x1, 0.3), lerp(S1[1], y1, 0.3)]], dark);
+    g.beginPath(); g.arc(x2, y2, w2 / 2, 0, Math.PI * 2); g.fillStyle = base; g.fill();
   }
 
-  // Drawn at native size (~98 px tall), origin at the feet. facing 'back' (near) or 'front' (far).
-  function drawPlayer(ctx, x, y, scale, anim, af, facing, hairIdx) {
-    const p = pose(anim, af);
-    ctx.save();
-    ctx.translate(x, y); ctx.scale(scale * (facing === 'front' ? -1 : 1), scale);
-    const hipY = -40 + p.crouch - p.bob, sh = -64 + p.crouch - p.bob, lean = p.lean;
-    const hx = lean * 0.4;
-    // legs + shoes
-    const fl = p.footL - p.step, fr = p.footR + p.step;
-    limb(ctx, hx - 4, hipY, fl, -4, 6, SKIN); limb(ctx, hx + 4, hipY, fr, -4, 6, SKIN);
-    ctx.fillStyle = '#fff'; ctx.strokeStyle = OUTLINE; ctx.lineWidth = 1;
-    for (const f of [fl, fr]) { ctx.beginPath(); ctx.ellipse(f, -2, 5, 3, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); }
-    const back = facing === 'back';
-    const racket = () => {
-      const hx2 = p.hand[0] + lean * 0.6, hy2 = p.hand[1] - p.bob;
-      const a = p.rack * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
-      limb(ctx, hx2, hy2, hx2 + ca * 14, hy2 + sa * 14, 3, '#333');
-      ctx.save(); ctx.translate(hx2 + ca * 26, hy2 + sa * 26); ctx.rotate(a);
-      ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.strokeStyle = '#2b3bd0'; ctx.lineWidth = 2.5;
-      ctx.beginPath(); ctx.ellipse(0, 0, 12, 8.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.restore();
-    };
-    const arms = () => {
-      const sx = lean * 0.7;
-      limb(ctx, sx + 9, sh + 3, p.hand[0] + lean * 0.6, p.hand[1] - p.bob, 4.5, SKIN);
-      limb(ctx, sx - 9, sh + 3, p.off[0] + lean * 0.6, p.off[1] - p.bob, 4.5, SKIN);
-    };
-    if (back) { racket(); arms(); }
-    // skirt + shirt
-    ctx.fillStyle = '#fff'; ctx.strokeStyle = OUTLINE; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(hx - 8, hipY - 6); ctx.lineTo(hx + 8, hipY - 6); ctx.lineTo(hx + 13, hipY + 6); ctx.lineTo(hx - 13, hipY + 6); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(lean * 0.7 - 10, sh); ctx.lineTo(lean * 0.7 + 10, sh); ctx.lineTo(hx + 8, hipY - 4); ctx.lineTo(hx - 8, hipY - 4); ctx.closePath(); ctx.fill(); ctx.stroke();
-    // head
-    const hdx = lean * 0.8, hdy = sh - 9 + p.head;
-    ctx.fillStyle = SKIN; ctx.beginPath(); ctx.arc(hdx, hdy, 7.5, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = HAIR[hairIdx || 0];
-    if (back) { ctx.beginPath(); ctx.arc(hdx, hdy - 0.5, 8, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(hdx, hdy + 6, 3.5, 0, Math.PI * 2); ctx.fill(); }
-    else {
-      ctx.beginPath(); ctx.arc(hdx, hdy - 2, 8, Math.PI, 0); ctx.fill();
-      ctx.fillStyle = '#333'; ctx.fillRect(hdx - 3.5, hdy, 1.6, 1.6); ctx.fillRect(hdx + 2, hdy, 1.6, 1.6);
+  // Two-bone IK: joint between a and c. pick(j1, j2) chooses between the two solutions.
+  function joint(ax, ay, cx, cy, l1, l2, pick) {
+    const dx = cx - ax, dy = cy - ay, D = Math.hypot(dx, dy) || 0.01, d = Math.min(D, l1 + l2 - 0.01);
+    const k = (l1 * l1 - l2 * l2 + d * d) / (2 * d), h = Math.sqrt(Math.max(0, l1 * l1 - k * k));
+    const ux = dx / D, uy = dy / D;
+    return pick([ax + ux * k - uy * h, ay + uy * k + ux * h], [ax + ux * k + uy * h, ay + uy * k - ux * h]);
+  }
+  const lower = (a, b) => (a[1] > b[1] ? a : b);
+
+  function racket(g, hx, hy, angDeg, face, len) {
+    const a = angDeg * Math.PI / 180, ux = Math.cos(a), uy = Math.sin(a), vx = -uy, vy = ux;
+    const L = len, A = 20 * L, B = 14.5 * Math.max(0.1, face);
+    const sx = hx + ux * 15 * L, sy = hy + uy * 15 * L;          // end of the shaft
+    const cx = hx + ux * (15 * L + A * 0.55 + 6 * L), cy = hy + uy * (15 * L + A * 0.55 + 6 * L);
+    g.lineCap = 'round';
+    g.strokeStyle = COL.grip; g.lineWidth = 3.4;
+    g.beginPath(); g.moveTo(hx - ux * 3, hy - uy * 3); g.lineTo(hx + ux * 8 * L, hy + uy * 8 * L); g.stroke();
+    // throat (open V)
+    const tx = cx - ux * A * 0.86, ty = cy - uy * A * 0.86;
+    for (const sd of [1, -1]) {
+      g.strokeStyle = COL.frameD; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(hx + ux * 8 * L, hy + uy * 8 * L); g.lineTo(sx, sy); g.lineTo(tx + vx * B * 0.5 * sd, ty + vy * B * 0.5 * sd); g.stroke();
+      g.strokeStyle = COL.frame; g.lineWidth = 1.6;
+      g.beginPath(); g.moveTo(sx, sy); g.lineTo(tx + vx * B * 0.5 * sd, ty + vy * B * 0.5 * sd); g.stroke();
     }
-    if (!back) { arms(); racket(); }
-    ctx.restore();
+    // hollow head: dark rim then lighter rim nudged to the upper left
+    g.save(); g.translate(cx, cy); g.rotate(a);
+    g.strokeStyle = COL.frameD; g.lineWidth = 5.6;
+    g.beginPath(); g.ellipse(0, 0, A, B, 0, 0, Math.PI * 2); g.stroke();
+    g.strokeStyle = COL.frame; g.lineWidth = 3;
+    g.beginPath(); g.ellipse(-0.6, -0.6, A - 0.6, Math.max(0.6, B - 0.6), 0, 0, Math.PI * 2); g.stroke();
+    g.restore();
+  }
+
+  function drawPlayer(ctx, x, y, scale, anim, af, facing, hairIdx) {
+    const p = pose(anim, af, facing), back = facing === 'back';
+    const g = ctx;
+    g.save();
+    g.translate(x, y); g.scale(1.2 * scale * (back ? 1 : -1), 1.2 * scale);
+    const c = p.crouch, hipY = -38 + c, waistY = hipY - 9, sh = -63 + c * 1.1, hx = p.lean * 0.4, sx = p.lean;
+    const hdx = sx * 1.1, hdy = sh - 10 + p.head;
+
+    const drawRacketArm = () => {
+      const S = [sx + 8.5, sh + 2], H = p.hand, E = joint(S[0], S[1], H[0], H[1], 13, 13, lower);
+      racket(g, H[0], H[1], p.rack, p.face, p.len);
+      if (p.hideArms) return;  // held in front of the chest, hidden by the body (back view)
+      seg(g, S[0], S[1], E[0], E[1], 6, 5, COL.skin, COL.skinD);
+      seg(g, E[0], E[1], H[0], H[1], 5, 4.2, COL.skin, COL.skinD);
+      seg(g, S[0], S[1], lerp(S[0], E[0], 0.3), lerp(S[1], E[1], 0.3), 6.5, 6, COL.cloth, COL.clothD);
+    };
+    const drawOffArm = () => {
+      if (p.hideArms) return;
+      const S = [sx - 8.5, sh + 2], H = p.off, E = joint(S[0], S[1], H[0], H[1], 13, 13, lower);
+      seg(g, S[0], S[1], E[0], E[1], 6, 5, COL.skin, COL.skinD);
+      seg(g, E[0], E[1], H[0], H[1], 5, 4.2, COL.skin, COL.skinD);
+      seg(g, S[0], S[1], lerp(S[0], E[0], 0.3), lerp(S[1], E[1], 0.3), 6.5, 6, COL.cloth, COL.clothD);
+    };
+
+    // legs: knees bend towards the camera, so a crouch mostly shortens the projected leg
+    p.feet.forEach(([fx, fy], i) => {
+      const sd = i ? 1 : -1, lift = Math.max(0, (i ? -1 : 1) * p.step) * 6;
+      const f = [fx + p.step * sd * 1.5, fy - lift];
+      const Hp = [hx + sd * 3.5, hipY];
+      const K = [lerp(Hp[0], f[0], 0.5) + sd * (0.5 + c * 0.35), lerp(Hp[1], f[1] - 3, 0.5) - lift * 0.3];
+      seg(g, Hp[0], Hp[1], K[0], K[1], 8, 6.2, COL.skin, COL.skinD);
+      seg(g, K[0], K[1], f[0], f[1] - 3, 6.2, 4.4, COL.skin, COL.skinD);
+      poly(g, [[f[0] - 3.8, f[1] - 4], [f[0] + 3.8, f[1] - 4.5], [f[0] + 4.2, f[1] + 0.5], [f[0] - 3.5, f[1] + 1]], COL.cloth);
+      poly(g, [[f[0] - 3.5, f[1] - 0.6], [f[0] + 4.2, f[1] - 0.8], [f[0] + 4.2, f[1] + 0.5], [f[0] - 3.5, f[1] + 1]], COL.shoeD);
+    });
+
+    if (!p.over) drawRacketArm();
+    if (back) drawOffArm();
+    // dress: bodice + flared skirt, shaded on the right and along the hem
+    poly(g, [[sx - 8.5, sh], [sx + 8.5, sh], [hx + 6.5, waistY], [hx - 6.5, waistY]], COL.cloth);
+    poly(g, [[sx + 3, sh], [sx + 8.5, sh], [hx + 6.5, waistY], [hx + 2.5, waistY]], COL.clothD);
+    poly(g, [[hx - 7.5, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 6], [hx - 11.5, hipY + 6]], COL.cloth);
+    poly(g, [[hx + 3, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 6], [hx + 5.5, hipY + 6]], COL.clothD);
+    poly(g, [[hx - 11, hipY + 4], [hx + 11, hipY + 4], [hx + 11.5, hipY + 6], [hx - 11.5, hipY + 6]], COL.clothD);
+    if (!back) drawOffArm();
+
+    // neck + head (octagon), hair; front view adds the white visor and dark glasses
+    seg(g, hdx * 0.9, sh + 1, hdx, hdy + 5, 4.5, 4.5, COL.skin, COL.skinD);
+    const oct = (r, ox, oy) => Array.from({ length: 8 }, (_, i) => [hdx + ox + r * Math.cos((i + 0.5) * Math.PI / 4), hdy + oy + r * Math.sin((i + 0.5) * Math.PI / 4)]);
+    poly(g, oct(7.6, 0, 0), COL.skin);
+    const hair = COL.hair[hairIdx || 0];
+    if (back) {
+      poly(g, oct(8, 0, -0.5), hair);
+      poly(g, [[hdx - 6, hdy - 5], [hdx - 1, hdy - 8], [hdx + 1, hdy - 3], [hdx - 4, hdy]], COL.hairL);
+      poly(g, [[hdx - 7, hdy + 2], [hdx + 7, hdy + 2], [hdx + 4, hdy + 7.5], [hdx - 4, hdy + 7.5]], COL.hairD);
+      poly(g, oct(3, 2.5, 6.5), hair);
+    } else {
+      poly(g, [[hdx + 3, hdy - 3], [hdx + 7.5, hdy - 2], [hdx + 7, hdy + 4], [hdx + 3, hdy + 6]], COL.skinD);
+      poly(g, [[hdx - 8, hdy - 1], [hdx - 6, hdy - 7.5], [hdx, hdy - 9], [hdx + 6, hdy - 7.5], [hdx + 8, hdy - 1], [hdx + 4, hdy - 5], [hdx - 4, hdy - 5]], hair);
+      poly(g, [[hdx - 7.8, hdy - 4.2], [hdx + 7.8, hdy - 4.2], [hdx + 7.6, hdy - 1.6], [hdx - 7.6, hdy - 1.6]], COL.visor);
+      poly(g, [[hdx - 6.5, hdy - 1.2], [hdx + 6.5, hdy - 1.2], [hdx + 5.5, hdy + 2], [hdx - 5.5, hdy + 2]], COL.lens);
+    }
+    if (p.over) drawRacketArm();
+    g.restore();
   }
 
   function shadow(ctx, x, y, rx, ry) {
@@ -189,7 +269,7 @@
       return { mc, q: P(vx * s, vy * s) };
     });
     const near = flip ? 1 : 0, far = 1 - near;
-    for (const i of [far, near]) shadow(ctx, pl[i].q.x, pl[i].q.y, 33 * 0.6 * pl[i].q.per, 10 * 0.6 * pl[i].q.per);
+    for (const i of [far, near]) shadow(ctx, pl[i].q.x, pl[i].q.y, 34 * 0.6 * pl[i].q.per, 14 * 0.6 * pl[i].q.per);
     const drawPl = (i, facing) => drawPlayer(ctx, pl[i].q.x, pl[i].q.y, 0.6 * pl[i].q.per, pl[i].mc.anim, pl[i].mc.af, facing, i);
     drawPl(far, 'front');
     drawNet(ctx);
