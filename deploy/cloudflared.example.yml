@@ -1,0 +1,7 @@
+# Copy to deploy/cloudflared.yml and fill in the tunnel id from `cloudflared tunnel create tennis`.
+tunnel: <TUNNEL_ID>
+credentials-file: /home/<user>/.cloudflared/<TUNNEL_ID>.json
+ingress:
+  - hostname: tennis.tandor.fr
+    service: http://127.0.0.1:8780
+  - service: http_status:404

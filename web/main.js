@@ -73,7 +73,11 @@
   // ---------- title ----------
   const MENU = [['EXHIBITION', 346], ['TOURNAMENT', 376], ['2 PLAYERS', 406]];
   const Title = {
-    enter() { resetData(); A.playMusic('title'); },
+    enter() {
+      resetData(); A.playMusic('title');
+      const m = /^#([A-Za-z0-9]{4})$/.exec(location.hash);  // shared invite link
+      if (m) go(Lobby(m[1]));
+    },
     tick() {},
     draw() {
       R.drawScene(ctx);
@@ -308,133 +312,126 @@
     } else go(Title);
   }
 
-  // ---------- network lobby ----------
-  function ipKind(ip) {  // tells which address the other player should use
-    const [a, b] = ip.split('.').map(Number);
-    if (a === 100 && b >= 64 && b < 128) return '(Tailscale)';
-    if (a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b < 32)) return '(réseau local)';
-    return '(autre réseau)';
+  // ---------- online: one WebSocket to the game server, re-opened after a drop ----------
+  let sess = null, netWanted = false, retry = null;
+  function connect() {
+    if (retry) { clearTimeout(retry); retry = null; }
+    const ws = new WebSocket(N.wsUrl());
+    if (!sess) sess = new N.OnlineSession(ws); else sess.bind(ws);
+    ws.onopen = () => { if (sess.code && sess.token && !sess.closed) sess.join(sess.code, sess.token); };
+    ws.onclose = () => { if (netWanted && sess.ws === ws) retry = setTimeout(connect, 1000); };
   }
-  function Lobby() {
-    // mode: null | 'host' | 'join' (sessions found on the LAN) | 'manual' (type an IP)
-    let mode = null, info = null, status = '', ws = null, found = [], poll = null;
-    const BTN_HOST = [170, 150, 250, 40], BTN_JOIN = [170, 225, 250, 40], BTN_GO = [230, 375, 130, 36], BTN_BACK = [230, 520, 130, 32];
-    const BTN_MANUAL = [210, 445, 180, 28], row = (i) => [120, 296 + i * 46, 360, 38];
-    fetch('/info').then((r) => r.json()).then((j) => { info = j; }).catch(() => {});
-    try { addr.value = localStorage.getItem('tennis.addr') || ''; } catch (e) { /* storage unavailable */ }
-    function cleanup() { if (ws) { ws.onclose = null; ws.close(); ws = null; } if (poll) { clearInterval(poll); poll = null; } addr.style.display = 'none'; }
-    function host() {
-      mode = 'host'; status = 'Connexion au serveur local...';
-      ws = new WebSocket(N.wsUrl(location.host, 'host'));
-      const h = new N.HostSession(ws);
-      ws.onopen = () => { status = "En attente de l'adversaire..."; };
-      ws.onclose = () => { status = 'Serveur local injoignable.'; };
-      const check = setInterval(() => {
-        if (scene !== self) return clearInterval(check);
-        if (h.peerOn) { clearInterval(check); startNet(h, ws, true); }
-      }, 100);
-    }
-    function browse() {
-      mode = 'join'; status = ''; found = [];
-      const refresh = () => fetch('/sessions').then((r) => r.json()).then((j) => { found = j; }).catch(() => { found = []; });
-      refresh(); poll = setInterval(() => { if (scene !== self) return clearInterval(poll); refresh(); }, 1000);
-    }
-    function join(raw) {
-      let a = String(raw).trim().replace(/^wss?:\/\//, '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-      if (!a) { status = "Entrez l'adresse IP de l'hôte."; return; }
-      if (!/:\d+$/.test(a)) a += ':8000';
-      if (ws) { ws.onclose = null; ws.close(); ws = null; }
-      status = 'Connexion à ' + a + '...';
-      ws = new WebSocket(N.wsUrl(a, 'client'));
-      const c = new N.ClientSession(ws);
-      ws.onerror = () => { status = 'Impossible de joindre ' + a + ' (réseau, pare-feu ?)'; };
-      const check = setInterval(() => {
-        if (scene !== self || !ws) return clearInterval(check);
-        if (ws.readyState === 1 && !c.hostOn) status = "Connecté, en attente de l'hôte...";
-        if (c.latest) { clearInterval(check); if (poll) { clearInterval(poll); poll = null; } addr.style.display = 'none'; startNet(c, ws, false); }
-      }, 100);
+  function netOn() { netWanted = true; if (!sess || sess.ws.readyState > 1) connect(); }
+  function netOff() {
+    netWanted = false;
+    if (sess) { sess.leave(); sess.ws.onclose = null; sess.ws.close(); sess = null; }
+    if (retry) { clearTimeout(retry); retry = null; }
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* file:// */ }
+  }
+  const shareLink = (code) => location.origin + location.pathname + '#' + code;
+
+  // ---------- online lobby ----------
+  function Lobby(autoCode) {
+    // mode: null | 'quick' (matchmaking) | 'private' (room created, waiting) | 'code' (typing a code)
+    let mode = null, status = '', copied = 0;
+    const BTN_QUICK = [150, 130, 300, 40], BTN_CREATE = [150, 185, 300, 40], BTN_JOIN = [150, 240, 300, 40];
+    const BTN_GO = [235, 395, 130, 36], BTN_COPY = [205, 420, 190, 30], BTN_BACK = [230, 520, 130, 32];
+    netOn();
+    addr.value = '';
+    function joinCode(raw) {
+      const code = String(raw).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+      if (code.length !== 4) { status = 'Le code fait 4 caractères.'; return; }
+      mode = 'joining'; status = 'Connexion à la partie ' + code + '...';
+      addr.style.display = 'none';
+      let token = null;  // set when this tab already played in that room (page reload)
+      try { token = sessionStorage.getItem('tennis.tok.' + code); } catch (e) { /* storage unavailable */ }
+      const send = () => { if (scene !== self) return; if (sess.ws.readyState === 1) sess.join(code, token); else setTimeout(send, 100); };
+      send();
     }
     const self = {
+      enter() { if (autoCode) joinCode(autoCode); },
+      tick() {
+        if (!sess) return;
+        if (copied) copied--;
+        if (sess.err) { status = sess.err; sess.err = null; if (mode === 'joining') mode = null; }
+        if (sess.code && sess.started) {
+          try { history.replaceState(null, '', '#' + sess.code); sessionStorage.setItem('tennis.tok.' + sess.code, sess.token); } catch (e) { /* file:// */ }
+          return startNet();
+        }
+        if (sess.ws.readyState !== 1) status = 'Connexion au serveur...';
+        else if (status === 'Connexion au serveur...') status = '';
+        if (sess.code && mode === 'quick') status = 'Recherche d\'un adversaire...';
+        if (sess.code && (mode === 'private' || mode === 'joining')) { mode = 'private'; status = "En attente de l'adversaire..."; }
+      },
       draw() {
         R.drawScene(ctx); R.panel(ctx);
-        R.text(ctx, '2 PLAYERS', 300, 80, 34, { align: 'center', outline: false });
+        R.text(ctx, '2 PLAYERS EN LIGNE', 300, 80, 32, { align: 'center', outline: false });
         const btn = (r, s, size) => {
           const hot = inRect(mx, my, r);
           ctx.fillStyle = hot ? '#ffd23a' : '#f2f2f2'; R.roundRect(ctx, r[0], r[1], r[2], r[3], 8); ctx.fill();
           R.text(ctx, s, r[0] + r[2] / 2, r[1] + r[3] / 2 + (size || 20) * 0.35, size || 20, { align: 'center', outline: false, color: '#222' });
         };
-        btn(BTN_HOST, 'HÉBERGER'); btn(BTN_JOIN, 'REJOINDRE');
-        if (mode === 'host') {
-          R.text(ctx, 'Partie ouverte :', 300, 315, 17, { align: 'center', outline: false });
-          R.text(ctx, info ? info.name : '...', 300, 350, 28, { align: 'center', outline: false, color: '#ffd23a' });
-          R.text(ctx, "Elle apparaît dans REJOINDRE chez l'autre joueur (même réseau).", 300, 382, 14, { align: 'center', outline: false, color: '#ccc' });
-          if (info) R.text(ctx, 'Sinon, IP : ' + info.ips.map((ip) => ip + ':' + info.port + ' ' + ipKind(ip)).slice(0, 2).join('   '), 300, 412, 13, { align: 'center', outline: false, color: '#ccc' });
+        btn(BTN_QUICK, 'PARTIE RAPIDE'); btn(BTN_CREATE, 'CRÉER UNE PARTIE PRIVÉE', 18); btn(BTN_JOIN, 'REJOINDRE AVEC UN CODE', 18);
+        if (mode === 'quick') {
+          R.text(ctx, 'Vous jouerez contre le prochain joueur', 300, 330, 17, { align: 'center', outline: false });
+          R.text(ctx, 'qui clique sur PARTIE RAPIDE.', 300, 354, 17, { align: 'center', outline: false });
         }
-        if (mode === 'join') {
-          if (!found.length) {
-            R.text(ctx, 'Recherche de parties sur le réseau...', 300, 330, 18, { align: 'center', outline: false });
-            R.text(ctx, "(même box, même Wi-Fi ou partage de connexion d'un téléphone)", 300, 356, 14, { align: 'center', outline: false, color: '#ccc' });
-          }
-          found.slice(0, 3).forEach((g, i) => {
-            const r = row(i), hot = inRect(mx, my, r);
-            ctx.fillStyle = hot ? '#ffd23a' : '#f2f2f2'; R.roundRect(ctx, r[0], r[1], r[2], r[3], 8); ctx.fill();
-            R.text(ctx, 'Partie de ' + g.name, r[0] + 14, r[1] + 25, 19, { outline: false, color: '#222' });
-            R.text(ctx, g.addr, r[0] + r[2] - 12, r[1] + 24, 12, { align: 'right', outline: false, color: '#666' });
-          });
-          btn(BTN_MANUAL, 'Entrer une IP...', 15);
+        if (mode === 'private' && sess && sess.code) {
+          R.text(ctx, 'Code de la partie :', 300, 318, 17, { align: 'center', outline: false });
+          R.text(ctx, sess.code, 300, 366, 46, { align: 'center', outline: false, color: '#ffd23a' });
+          R.text(ctx, shareLink(sess.code).replace(/^https?:\/\//, ''), 300, 400, 14, { align: 'center', outline: false, color: '#ccc' });
+          btn(BTN_COPY, copied ? 'LIEN COPIÉ !' : 'COPIER LE LIEN', 15);
         }
-        if (mode === 'manual') {
-          R.text(ctx, "Adresse de l'hôte (IP:port) :", 300, 318, 16, { align: 'center', outline: false });
-          btn(BTN_GO, 'OK');
-        }
-        R.text(ctx, status, 300, 494, 16, { align: 'center', outline: false, color: '#9ad0ff' });
-        R.text(ctx, 'Hôte = joueur du bas (P1), invité = joueur du haut (P2)', 300, 125, 14, { align: 'center', outline: false, color: '#ccc' });
+        if (mode === 'code') R.text(ctx, 'Code donné par votre adversaire :', 300, 318, 16, { align: 'center', outline: false });
+        if (mode === 'code') btn(BTN_GO, 'OK');
+        R.text(ctx, status, 300, 482, 16, { align: 'center', outline: false, color: '#9ad0ff' });
+        if (sess && sess.online) R.text(ctx, sess.online + (sess.online > 1 ? ' joueurs en ligne' : ' joueur en ligne'), 300, 508, 13, { align: 'center', outline: false, color: '#ccc' });
         btn(BTN_BACK, 'RETOUR');
       },
-      tick() {},
       onClick(x, y) {
-        if (inRect(x, y, BTN_BACK)) { cleanup(); return go(Title); }
-        if (inRect(x, y, BTN_HOST) && mode !== 'host') { cleanup(); host(); return; }
-        if (inRect(x, y, BTN_JOIN) && mode !== 'join') { cleanup(); browse(); return; }
-        if (mode === 'join') {
-          const i = found.slice(0, 3).findIndex((g, k) => inRect(x, y, row(k)));
-          if (i >= 0) { A.play('click'); join(found[i].addr); }
-          else if (inRect(x, y, BTN_MANUAL)) { cleanup(); mode = 'manual'; status = ''; addr.style.display = 'block'; positionAddr(); addr.focus(); }
-        } else if (mode === 'manual' && inRect(x, y, BTN_GO)) manualJoin();
+        if (inRect(x, y, BTN_BACK)) { netOff(); return go(Title); }
+        if (!sess) return;
+        if (inRect(x, y, BTN_QUICK)) { A.play('click'); addr.style.display = 'none'; mode = 'quick'; status = ''; sess.quick(); return; }
+        if (inRect(x, y, BTN_CREATE)) { A.play('click'); addr.style.display = 'none'; mode = 'private'; status = ''; sess.create(); return; }
+        if (inRect(x, y, BTN_JOIN)) {
+          A.play('click'); if (sess.code) sess.leave();
+          mode = 'code'; status = ''; addr.style.display = 'block'; positionAddr(); addr.focus(); return;
+        }
+        if (mode === 'code' && inRect(x, y, BTN_GO)) joinCode(addr.value);
+        if (mode === 'private' && sess.code && inRect(x, y, BTN_COPY)) {
+          const link = shareLink(sess.code);
+          if (navigator.clipboard) navigator.clipboard.writeText(link).then(() => { copied = 60; }, () => { status = link; });
+          else status = link;
+        }
       },
-      onKey(k) { if (k === 'Enter' && mode === 'manual') manualJoin(); if (k === 'Escape') { cleanup(); go(Title); } },
+      onKey(k) {
+        if (k === 'Enter' && mode === 'code') joinCode(addr.value);
+        if (k === 'Escape') { netOff(); go(Title); }
+      },
     };
-    function manualJoin() {
-      try { localStorage.setItem('tennis.addr', addr.value.trim()); } catch (e) { /* ignore */ }
-      join(addr.value);
-    }
     return self;
   }
 
-  // ---------- network match ----------
-  function startNet(sess, ws, isHost) {
-    let prev = null, closed = false;
-    ws.onclose = () => { closed = true; };
-    if (!isHost) sess.onEvents = (ev) => ev.forEach((e) => A.play(e));
-    const leave = () => { ws.onclose = null; ws.close(); go(Title); };
+  // ---------- online match ----------
+  function startNet() {
+    let prev = null;
+    sess.onEvents = (ev) => ev.forEach((e) => A.play(e));
+    const leave = () => { sess.onEvents = null; netOff(); go(Title); };
     go({
       tick() {
-        if (isHost) {
-          prev = sess.paused ? prev : snapPos(sess.G);
-          const ev = sess.tick(readPad());
-          ev.forEach((e) => A.play(e));
-        } else sess.tick(readPad());
+        prev = sess.view ? snapPos(sess.view) : null;
+        sess.tick(readPad());
       },
       draw(alpha) {
-        const g = isHost ? sess.G : sess.view();
+        const g = sess.view;
         if (!g) return;
-        drawMatch(g, !isHost, isHost ? prev : null, alpha, isHost ? 0 : 1);
+        drawMatch(g, sess.me === 1, prev, alpha, sess.me);
         const rtt = sess.rtt;
-        R.text(ctx, (isHost ? 'HÔTE (P1)' : 'INVITÉ (P2)') + (rtt != null ? '  ping ' + Math.round(rtt) + ' ms' : ''), 8, 20, 14);
+        R.text(ctx, 'VOUS : P' + (sess.me + 1) + (rtt != null ? '  ping ' + Math.round(rtt) + ' ms' : ''), 8, 20, 14);
         let msg = null;
-        if (closed) msg = isHost ? 'Serveur local arrêté' : "Connexion à l'hôte perdue";
-        else if (isHost && sess.paused) msg = 'Adversaire déconnecté - pause';
-        else if (!isHost && (sess.lost || sess.paused)) msg = sess.paused ? 'Pause - en attente...' : 'Hôte injoignable - pause';
+        if (sess.closed) msg = "L'adversaire a quitté la partie";
+        else if (sess.lost) msg = 'Connexion perdue - reconnexion...';
+        else if (sess.paused) msg = sess.peerOn ? 'Pause - en attente...' : 'Adversaire déconnecté - pause';
         if (msg) {
           ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 270, 600, 70);
           R.text(ctx, msg, 300, 302, 24, { align: 'center' });

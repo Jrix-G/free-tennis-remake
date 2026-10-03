@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Free Tennis</title>
+<meta name="description" content="Tennis Game remake : solo ou 2 joueurs en ligne, directement dans le navigateur.">
 <style>
   :root { --bg: #0e0e0e; }
   html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
@@ -15,7 +16,7 @@
 </style>
 </head>
 <body>
-<div id="wrap"><div id="stage"><canvas id="c" width="600" height="600"></canvas><input id="addr" spellcheck="false" placeholder="192.168.1.10:8000"></div></div>
+<div id="wrap"><div id="stage"><canvas id="c" width="600" height="600"></canvas><input id="addr" spellcheck="false" placeholder="CODE" maxlength="4" autocomplete="off" style="text-transform:uppercase"></div></div>
 <script src="game.js"></script>
 <script src="net.js"></script>
 <script src="render.js"></script>

@@ -1,3 +1,0 @@
-# Aucune dépendance : bibliothèque standard Python uniquement (3.8+).
-# Optionnel, pour construire un exécutable autonome :
-#   pip install pyinstaller

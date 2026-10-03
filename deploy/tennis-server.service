@@ -1,0 +1,12 @@
+# systemd *user* unit (~/.config/systemd/user/): the game server, local only (the tunnel exposes it).
+[Unit]
+Description=Free Tennis online - game server
+After=network-online.target
+
+[Service]
+ExecStart=%h/.nvm/versions/node/v22.22.1/bin/node %h/tennis/server/server.js --port 8780 --host 127.0.0.1
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

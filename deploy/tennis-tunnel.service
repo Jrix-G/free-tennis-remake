@@ -1,0 +1,14 @@
+# systemd *user* unit: dedicated Cloudflare tunnel "tennis" -> tennis.tandor.fr.
+# Separate from any other tunnel on the machine. The command line deliberately avoids the string
+# "cloudflared tunnel run" so other scripts' pgrep on it never mistake this tunnel for theirs.
+[Unit]
+Description=Free Tennis online - Cloudflare tunnel
+After=network-online.target tennis-server.service
+
+[Service]
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --config %h/tennis/deploy/cloudflared.yml run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,15 +1,14 @@
-// End-to-end 2-player test on localhost: starts tennis.py, connects a simulated host and client
-// over real WebSockets, plays scripted points and checks both sides agree.
-// Run: node --experimental-websocket tests/net_test.js   (Node >= 22: flag not needed)
+// End-to-end online test: starts server/server.js with a fast clock, connects two real WebSocket
+// clients, plays scripted points and checks matchmaking, prediction, rooms and reconnection.
+// Run: node tests/net_test.js   (Node >= 22, or Node 20 with --experimental-websocket)
 const { spawn } = require('child_process');
 const path = require('path');
 const assert = require('assert');
 const L = require('../web/game.js');
 const N = require('../web/net.js');
 
-const PORT = 8799;
+const PORT = 8799, TICK = 5;  // server and clients tick every 5 ms (x6.7 real time)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const py = process.platform === 'win32' ? 'python' : 'python3';
 
 function bot(g, pn, t) {  // pad in the player's own screen frame
   const me = g.P[pn], B = g.B, k = {}, s = pn === 0 ? 1 : -1;
@@ -20,65 +19,89 @@ function bot(g, pn, t) {  // pad in the player's own screen frame
   return k;
 }
 
-function open(role) {
+function open() {
   return new Promise((res, rej) => {
-    const ws = new WebSocket(N.wsUrl('127.0.0.1:' + PORT, role));
+    const ws = new WebSocket(N.wsUrl('127.0.0.1:' + PORT));
     ws.onopen = () => res(ws);
     ws.onerror = rej;
   });
 }
+const waitFor = async (pred, ms, what) => {
+  for (let t = 0; t < ms; t += 20) { if (pred()) return; await sleep(20); }
+  throw new Error('timeout: ' + what);
+};
 
 (async () => {
-  const srv = spawn(py, [path.join(__dirname, '..', 'tennis.py'), '--port', String(PORT), '--no-browser'], { stdio: 'ignore' });
-  // Second instance = the guest's own launcher, used to check LAN session discovery.
-  const srv2 = spawn(py, [path.join(__dirname, '..', 'tennis.py'), '--port', String(PORT + 1), '--no-browser'], { stdio: 'ignore' });
-  const listed = async () => (await (await fetch('http://127.0.0.1:' + (PORT + 1) + '/sessions')).json())
-    .some((g) => g.addr.endsWith(':' + PORT));
-  const waitFor = async (pred, ms) => { for (let t = 0; t < ms; t += 250) { if (await pred()) return true; await sleep(250); } return false; };
+  const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server', 'server.js'), '--port', String(PORT), '--host', '127.0.0.1', '--tick-ms', String(TICK)], { stdio: 'inherit' });
   try {
-    await sleep(800);
-    const hws = await open('host');
-    const host = new N.HostSession(hws, { seed: 1234 });
-    assert.ok(await waitFor(listed, 5000), 'open game is discovered by another instance');
-    const cws = await open('client');
-    const client = new N.ClientSession(cws);
-    await sleep(200);
-    assert.ok(host.peerOn && client.hostOn, 'peers see each other');
-    assert.ok(await waitFor(async () => !(await listed()), 6000), 'full game disappears from the list');
+    await sleep(500);
+    // --- quick match ---
+    const a = new N.OnlineSession(await open()), b = new N.OnlineSession(await open());
+    a.quick();
+    await waitFor(() => a.code, 2000, 'room for a');
+    assert.ok(!a.started, 'alone in the quick room');
+    b.quick();
+    await waitFor(() => a.started && b.started && a.view && b.view, 2000, 'match start');
+    assert.strictEqual(a.code, b.code, 'paired in the same room');
+    assert.deepStrictEqual([a.me, b.me], [0, 1]);
 
-    let t = 0, clientMoved = false, p2Served = false;
-    const startX = host.G.P[1].vx;
-    // Accelerated real time (5 ms/tick) until one game is over and P2 (the client) has served points in the second game.
-    while (!(host.G.server === 1 && host.G.point[0] + host.G.point[1] >= 2) && t < 40000) {
-      const cg = client.latest || host.G;
-      client.tick(bot(cg, 1, t));
-      await sleep(5);
-      host.tick(bot(host.G, 0, t));
-      if (host.G.P[1].vx !== startX) clientMoved = true;
-      if (host.G.server === 1 && host.G.P[1].stat === L.C.PS_TOSS) p2Served = true;
+    // --- play: both clients predict; check their own predicted position against the server ---
+    const predicted = [new Map(), new Map()];
+    let hits = 0, checks = 0, t = 0, p2Moved = false, p2Served = false;
+    const sessions = [a, b];
+    b.onEvents = () => {};
+    const startX = b.view.P[1].vx;
+    while (t < 30000) {
+      for (const s of sessions) {
+        s.tick(bot(s.view, s.me, t));
+        predicted[s.me].set(s.view.tick, s.view.P[s.me].vx + ',' + s.view.P[s.me].vy);
+        const srvG = s.server, guess = predicted[s.me].get(srvG.tick);
+        if (guess !== undefined && !s.paused) { checks++; if (guess === srvG.P[s.me].vx + ',' + srvG.P[s.me].vy) hits++; }
+      }
+      const G = a.server;
+      if (G.P[1].vx !== startX) p2Moved = true;
+      if (G.server === 1 && G.P[1].stat === L.C.PS_TOSS) p2Served = true;
+      if (G.server === 1 && G.point[0] + G.point[1] >= 2) break;
+      await sleep(TICK);
       t++;
     }
-    await sleep(200);
-    host.tick({});           // one more snapshot after the client caught up
-    await sleep(200);
-    const hg = host.G, cg = client.latest;
-    console.log('ticks', t, 'points', hg.point, 'games', hg.gpoint, 'score', JSON.stringify(hg.score_txt), 'rtt', client.rtt && client.rtt.toFixed(1) + 'ms');
-    assert.ok(t < 40000, 'points were played');
-    assert.ok(p2Served, 'client served (its Space reaches the host)');
-    assert.ok(clientMoved, 'client inputs reach the host simulation');
-    assert.strictEqual(JSON.stringify(cg), JSON.stringify(hg), 'client state == host state');
-    assert.ok(client.view(), 'client can build a render view');
+    const G = a.server;
+    console.log('ticks', t, 'games', G.gpoint, 'score', JSON.stringify(G.score_txt), 'own-position prediction',
+      (100 * hits / checks).toFixed(1) + '% of', checks, 'rtt', a.rtt && a.rtt.toFixed(1) + 'ms');
+    assert.ok(t < 30000, 'points were played');
+    assert.ok(p2Moved && p2Served, 'second player inputs reach the server simulation');
+    assert.ok(hits / checks > 0.8, 'client prediction matches the server most of the time');
+    assert.strictEqual(JSON.stringify(a.server), JSON.stringify(b.server), 'both clients got the same state');
 
-    // Disconnect handling: host pauses when the client leaves.
-    cws.close();
-    await sleep(300);
-    const tickBefore = host.G.tick;
-    host.tick({});
-    assert.ok(host.paused && host.G.tick === tickBefore, 'host pauses without peer');
-    hws.close();
-    console.log('net OK', p2Served ? '(P2 served)' : '');
+    // --- reconnection: b drops, the match pauses, b comes back with its token ---
+    const code = b.code, token = b.token;
+    b.ws.close();
+    await sleep(100);
+    for (let i = 0; i < 20; i++) { a.tick({}); await sleep(TICK); }
+    assert.ok(a.paused && !a.peerOn, 'match paused while the opponent is away');
+    b.bind(await open());
+    b.join(code, token);
+    await waitFor(() => b.me === 1 && a.peerOn, 2000, 'rejoin');
+    for (let i = 0; i < 40; i++) { a.tick({}); b.tick({}); await sleep(TICK); }
+    assert.ok(!a.paused && !b.paused, 'match resumes after reconnection');
+
+    // --- private room, wrong code, explicit leave ---
+    const c = new N.OnlineSession(await open()), d = new N.OnlineSession(await open());
+    d.join('ZZZZ');
+    await waitFor(() => d.err, 2000, 'unknown code error');
+    d.err = null;
+    d.join(code);
+    await waitFor(() => d.err, 2000, 'full room refused');
+    c.create();
+    await waitFor(() => c.code, 2000, 'private room');
+    d.join(c.code);
+    await waitFor(() => c.started && d.started && d.me === 1, 2000, 'private match start');
+    c.leave();
+    await waitFor(() => d.closed, 2000, 'opponent told about the leave');
+
+    for (const s of [a, b, c, d]) s.ws.close();
+    console.log('net OK');
   } finally {
     srv.kill();
-    srv2.kill();
   }
 })().catch((e) => { console.error(e); process.exit(1); });
