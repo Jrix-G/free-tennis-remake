@@ -431,7 +431,7 @@
     };
     go({
       tick() {
-        prev = sess.view ? snapPos(sess.view) : null;
+        prev = sess.shown ? snapPos(sess.shown) : null;
         sess.tick(readPad());
         if (intro > 0 && sess.view) intro--;
         const over = !!(sess.view && sess.view.over);
@@ -439,8 +439,9 @@
         wasOver = over;
         if (confirmQuit) confirmQuit--;
       },
+      tickScale: () => sess.tickScale,
       draw(alpha) {
-        const g = sess.view;
+        const g = sess.shown;
         if (!g) return;
         drawMatch(g, sess.me === 1, prev, alpha, sess.me, sess.players.map((p) => p && p.look));
         const opp = sess.players[1 - sess.me];
@@ -484,9 +485,10 @@
   let last = performance.now(), acc = 0;
   function frame(t) {
     acc += Math.min(250, t - last); last = t;
-    while (acc >= TICK) { scene.tick(); acc -= TICK; }
+    const tick = TICK * (scene.tickScale ? scene.tickScale() : 1);  // online: paced by the server queue
+    while (acc >= tick) { scene.tick(); acc -= tick; }
     ctx.clearRect(0, 0, 600, 600);
-    scene.draw(acc / TICK);
+    scene.draw(acc / tick);
     requestAnimationFrame(frame);
   }
   resize();

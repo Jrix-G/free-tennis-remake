@@ -23,7 +23,12 @@ const PORT = Number(arg('port', process.env.PORT || 8780));
 const HOST = arg('host', process.env.HOST || '0.0.0.0');
 const WEB_DIR = path.join(__dirname, '..', 'web');
 const TICK_MS = Number(arg('tick-ms', 1000 / 30));  // tests run the clock faster
-const MAX_QUEUE = 4;          // inputs buffered per player; older ones are dropped beyond that
+const MAX_QUEUE = 8;          // inputs buffered per player; older ones are dropped beyond that
+// Clients pace their ticks from the queue depth sent in each snapshot (net.js) so it stays near 1.
+// A network hiccup delivers several inputs at once and the queue would keep them forever (one in,
+// one out per tick): that much permanent lag. A queue still this deep after DEEP_TICKS loses one
+// input (its Space press is kept); the client's prediction absorbs the one-step difference.
+const DEEP_QUEUE = 3, DEEP_TICKS = 4;
 const STALE_MS = 1500;        // no input for that long (hidden tab...) -> pause
 const RECONNECT_MS = 60000;   // a dropped player keeps their slot that long
 const BOT_WAIT_MS = Number(arg('bot-wait-ms', 5000));  // quick match: search time before a bot steps in
@@ -212,7 +217,14 @@ class Room {
     } else {
       const pads = this.slots.map((s) => {
         if (s.bot) return {};  // the logic's own AI plays that side
-        const q = s.queue.shift();
+        let q = s.queue.shift();
+        s.deep = s.queue.length >= DEEP_QUEUE ? (s.deep || 0) + 1 : 0;
+        if (s.deep > DEEP_TICKS) {  // drop this input, keep its Space press
+          s.deep = 0;
+          const next = s.queue.shift();
+          if (q.k.sp) next.k.sp = true;
+          q = next;
+        }
         if (q) { s.ack = q.s; s.last = q.k; return q.k; }
         return Object.assign({}, s.last, { sp: false });  // late input: hold the direction
       });
@@ -229,7 +241,7 @@ class Room {
     const g = JSON.stringify(this.G);
     for (let i = 0; i < 2; i++) {
       const s = this.slots[i];
-      if (s && s.ws) s.ws.send('{"t":"snap","paused":' + paused + ',"ack":' + s.ack + ',"ev":' + JSON.stringify(ev) + ',"g":' + g + '}');
+      if (s && s.ws) s.ws.send('{"t":"snap","paused":' + paused + ',"ack":' + s.ack + ',"q":' + s.queue.length + ',"ev":' + JSON.stringify(ev) + ',"g":' + g + '}');
     }
   }
   // Ranked (quick match) result for logged-in players: W/L, XP, Elo. Guests count as 1000.
