@@ -78,7 +78,10 @@
   }
 
   // ---------- title ----------
-  const MENU = [['PARTIE RAPIDE', 346], ['TOURNAMENT', 376], ['HÉBERGER / REJOINDRE', 406], ['CLASSEMENT', 436]];
+  const MENU = [['PARTIE RAPIDE', 'Classé · Elo et XP', 300], ['TOURNOI', '16 joueurs, élimination directe', 362],
+    ['HÉBERGER / REJOINDRE', 'Joue avec un ami via un code', 424], ['CLASSEMENT', 'Les meilleurs joueurs', 486]];
+  const MENU_X = 140, MENU_W = 320, MENU_H = 52;
+  const menuRect = (y) => [MENU_X, y, MENU_W, MENU_H];
   const Title = {
     enter() {
       resetData(); A.playMusic('title');
@@ -87,24 +90,18 @@
     },
     tick() {},
     draw() {
-      R.drawScene(ctx);
-      R.text(ctx, 'TENNIS GAME', 300, 112, 64, { align: 'center', outline: false });
-      const help = ['Key Operation:', 'Space key to hit the ball.', 'Arrow key to move or  to aim the ball direction',
-        'at the moment of stroke.', 'Getting 3 games first  to win.'];
-      help.forEach((s, i) => R.text(ctx, s, 145, 140 + i * 22, 15, { outline: false }));
-      ctx.fillStyle = 'rgba(0,0,0,0.85)'; R.roundRect(ctx, 150, 316, 290, 148, 8); ctx.fill();
-      ctx.strokeStyle = '#ddd'; ctx.lineWidth = 2; ctx.stroke();
-      MENU.forEach(([s, y]) => {
-        const hot = inRect(mx, my, [150, y - 22, 290, 30]);
-        R.text(ctx, s, 295, y + 8, 21, { align: 'center', outline: false, color: hot ? '#ffd23a' : '#fff' });
-      });
+      R.drawTitleScene(ctx, performance.now() / 1000);
+      R.drawLogo(ctx, 'TENNUS', 300, 150);
+      R.text(ctx, 'Espace : frapper   ·   Flèches : bouger et viser   ·   3 jeux pour gagner', 300, 196, 12,
+        { align: 'center', outline: false, weight: 'normal', color: 'rgba(220,235,255,0.75)' });
+      MENU.forEach(([s, sub, y], i) => R.menuCard(ctx, menuRect(y), s, sub, inRect(mx, my, menuRect(y)), i === 0));
       const p = AC.profile;
       R.text(ctx, p ? 'Niv. ' + p.level + '   ·   Elo ' + p.elo + (p.points ? '   ·   ' + p.points + ' point(s) à placer !' : '')
-        : 'Invité : connectez-vous pour progresser', 295, 488, 14, { align: 'center', color: p && p.points ? '#ffd23a' : '#fff' });
-      R.text(ctx, 'remake', 580, 590, 12, { align: 'right', outline: false, color: 'rgba(255,255,255,0.7)' });
+        : 'Invité : connectez-vous pour progresser', 300, 566, 13,
+        { align: 'center', outline: false, color: p && p.points ? '#d4ff3a' : 'rgba(220,235,255,0.8)' });
     },
     onClick(x, y) {
-      const i = MENU.findIndex(([, my2]) => inRect(x, y, [150, my2 - 22, 290, 30]));
+      const i = MENU.findIndex(([, , my2]) => inRect(x, y, menuRect(my2)));
       if (i < 0) return;
       A.play('click'); A.stopMusic();
       if (i === 0) go(Lobby({ quick: true }));

@@ -358,5 +358,90 @@
     text(ctx, 'Space bar', x, y + 5, 16, { outline: false, color: '#333', align: 'center' });
   }
 
-  root.TennisRender = { drawGame, drawScene, drawPlayer, panel, bar, text, roundRect, spaceButton, FONT };
+
+  // ---------- title screen (modern night-court look, animated) ----------
+  let titleCache = null;
+  function titleCanvas() {
+    if (titleCache) return titleCache;
+    const c = document.createElement('canvas'); c.width = 600; c.height = 600;
+    const g = c.getContext('2d');
+    const bg = g.createLinearGradient(0, 0, 0, 600);
+    bg.addColorStop(0, '#070b1f'); bg.addColorStop(0.55, '#101a45'); bg.addColorStop(1, '#0a2a2a');
+    g.fillStyle = bg; g.fillRect(0, 0, 600, 600);
+    const glow = g.createRadialGradient(300, 150, 10, 300, 150, 320);
+    glow.addColorStop(0, 'rgba(120,90,255,0.35)'); glow.addColorStop(1, 'rgba(120,90,255,0)');
+    g.fillStyle = glow; g.fillRect(0, 0, 600, 600);
+    // court in perspective, neon lines
+    const hy = 250, by = 640, cx = 300;
+    const px = (u, y) => cx + u * (60 + (y - hy) / (by - hy) * 420);  // u in [-1, 1] across the court
+    g.fillStyle = 'rgba(30,140,120,0.18)';
+    g.beginPath(); g.moveTo(px(-1, hy), hy); g.lineTo(px(1, hy), hy); g.lineTo(px(1, by), by); g.lineTo(px(-1, by), by); g.fill();
+    g.strokeStyle = 'rgba(90,255,220,0.55)'; g.lineWidth = 2; g.shadowColor = '#5affdc'; g.shadowBlur = 10;
+    const vl = (u) => { g.beginPath(); g.moveTo(px(u, hy), hy); g.lineTo(px(u, by), by); g.stroke(); };
+    const hl = (y, u0, u1) => { g.beginPath(); g.moveTo(px(u0, y), y); g.lineTo(px(u1, y), y); g.stroke(); };
+    vl(-1); vl(1); vl(-0.78); vl(0.78);
+    hl(hy, -1, 1); hl(330, -0.78, 0.78); hl(470, -0.78, 0.78);
+    g.beginPath(); g.moveTo(cx, 330); g.lineTo(cx, 470); g.stroke();
+    // net
+    g.shadowBlur = 0;
+    g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(px(-1.08, 395), 372, px(1.08, 395) - px(-1.08, 395), 24);
+    g.strokeStyle = 'rgba(255,255,255,0.7)'; g.shadowColor = '#fff'; g.shadowBlur = 8; hl(372, -1.08, 1.08);
+    g.shadowBlur = 0;
+    // vignette
+    const v = g.createRadialGradient(300, 300, 200, 300, 300, 440);
+    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.6)');
+    g.fillStyle = v; g.fillRect(0, 0, 600, 600);
+    titleCache = c;
+    return c;
+  }
+
+  function drawTitleScene(ctx, t) {
+    ctx.drawImage(titleCanvas(), 0, 0);
+    // drifting light particles
+    for (let i = 0; i < 28; i++) {
+      const x = (i * 97 + t * (8 + i % 5 * 4)) % 620 - 10, y = (i * 53) % 260 + Math.sin(t + i) * 6;
+      ctx.fillStyle = 'rgba(200,220,255,' + (0.15 + (i % 4) * 0.08) + ')';
+      ctx.fillRect(x, y, 2, 2);
+    }
+    // ball bouncing across the court
+    const ph = (t * 0.45) % 2, k = ph < 1 ? ph : 2 - ph;
+    const bx = 120 + k * 360, ground = 520 - k * 60, hop = Math.abs(Math.sin(t * 3.2)) * 70, r = 9 - k * 2;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(bx, ground + r, r * 1.2, r * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.save(); ctx.shadowColor = '#d4ff3a'; ctx.shadowBlur = 18;
+    ctx.fillStyle = '#d4ff3a'; ctx.beginPath(); ctx.arc(bx, ground - hop, r, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawLogo(ctx, s, x, y) {
+    ctx.save();
+    ctx.font = '900 italic 96px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    const gr = ctx.createLinearGradient(0, y - 80, 0, y);
+    gr.addColorStop(0, '#f4ffb0'); gr.addColorStop(0.5, '#d4ff3a'); gr.addColorStop(1, '#5affdc');
+    ctx.shadowColor = 'rgba(212,255,58,0.7)'; ctx.shadowBlur = 30;
+    ctx.fillStyle = gr; ctx.fillText(s, x, y);
+    ctx.shadowBlur = 0; ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.strokeText(s, x, y);
+    ctx.fillStyle = 'rgba(212,255,58,0.9)'; ctx.fillRect(x - 70, y + 14, 140, 3);
+    ctx.restore();
+  }
+
+  function menuCard(ctx, r, label, sub, hot, primary) {
+    const [x, y, w, h] = r;
+    ctx.save();
+    if (hot) { ctx.shadowColor = '#d4ff3a'; ctx.shadowBlur = 20; }
+    if (primary || hot) {
+      const gr = ctx.createLinearGradient(x, 0, x + w, 0);
+      gr.addColorStop(0, hot ? '#d4ff3a' : 'rgba(212,255,58,0.9)'); gr.addColorStop(1, hot ? '#5affdc' : 'rgba(90,255,220,0.8)');
+      ctx.fillStyle = gr;
+    } else ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    roundRect(ctx, x, y, w, h, 14); ctx.fill();
+    ctx.shadowBlur = 0;
+    if (!primary && !hot) { ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    ctx.restore();
+    const dark = primary || hot, col = dark ? '#0b1030' : '#fff';
+    text(ctx, label, x + 22, y + 24, 18, { outline: false, color: col });
+    text(ctx, sub, x + 22, y + 42, 11, { outline: false, weight: 'normal', color: dark ? 'rgba(11,16,48,0.75)' : 'rgba(220,235,255,0.65)' });
+    text(ctx, '›', x + w - 22, y + 34, 26, { outline: false, color: col, align: 'right' });
+  }
+
+  root.TennisRender = { drawGame, drawScene, drawTitleScene, drawLogo, menuCard, drawPlayer, panel, bar, text, roundRect, spaceButton, FONT };
 })(typeof self !== 'undefined' ? self : this);
