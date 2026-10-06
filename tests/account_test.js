@@ -41,7 +41,7 @@ const login = async (sub) => post('/api/login', { credential: idToken({ sub, ema
     const u = shopDb.loginGoogle('shop-test', 'shop@example.com');
     assert.strictEqual(DB.publicProfile(u).coins, 0, 'new account starts with no coins');
     assert.strictEqual(shopDb.shop(u.id, 'buy', 'racket', 'gold'), 'Pas assez de pièces');
-    for (let i = 0; i < 5; i++) shopDb.recordResult(u.id, true, 1000 + (i + 1) * 10, CO.COINS_WIN);
+    for (let i = 0; i < 5; i++) shopDb.recordMatch(u.id, { won: true, newElo: 1000 + (i + 1) * 10 });
     assert.strictEqual(DB.publicProfile(shopDb.user(u.id)).coins, 500, 'completed wins grant persisted coins');
     assert.strictEqual(shopDb.shop(u.id, 'buy', 'racket', 'gold'), null);
     assert.strictEqual(shopDb.shop(u.id, 'equip', 'racket', 'gold'), null);
@@ -88,7 +88,7 @@ const login = async (sub) => post('/api/login', { credential: idToken({ sub, ema
     const saved = await post('/api/profile', { name: '  Ace   Lucas ', look: { cloth: 'red', hair: 'nope' } }, a.cookie);
     assert.strictEqual(saved.status, 200);
     assert.deepStrictEqual([saved.json.profile.name, saved.json.profile.look], ['Ace Lucas', {
-      cloth: 'red', hair: 'brown', racket: 'classic', shirt: 'red', shorts: 'red', cap: 'none',
+      cloth: 'red', hair: 'brown', racket: 'classic', shirt: 'red', shorts: 'red', cap: 'none', court: 'arena',
     }], 'name trimmed, unknown item reset and legacy outfit colors preserved');
     const b = await login('google-sub-b');
     const dup = await post('/api/profile', { name: 'ace lucas' }, b.cookie);
@@ -105,7 +105,7 @@ const login = async (sub) => post('/api/login', { credential: idToken({ sub, ema
     for (let i = 0; i < 100 && (!s.started || !s2.started); i++) await sleep(20);
     assert.ok(s.started && s2.started, 'two authenticated players paired');
     assert.deepStrictEqual(s.players[0], {
-      name: 'Ace Lucas', look: { cloth: 'red', hair: 'brown', racket: 'classic', shirt: 'red', shorts: 'red', cap: 'none' }, elo: 1000, level: 1,
+      name: 'Ace Lucas', look: { cloth: 'red', hair: 'brown', racket: 'classic', shirt: 'red', shorts: 'red', cap: 'none', court: 'clay' }, elo: 1000, level: 1, trophies: 0,
     });
     const bot = s.players[1];
     assert.ok(Math.abs(bot.elo - 1000) <= 60 && bot.level >= 1, 'bot rating close to the player');

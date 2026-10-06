@@ -40,6 +40,24 @@
       { id: 'jade', name: 'Casquette jade', color: '#2fae5a', shade: '#1f7a3e', price: 120 },
       { id: 'gold', name: 'Visière VIP', color: '#ffd23a', shade: '#a45d19', price: 180 },
     ],
+    // Half-court skins: each player's side of the court. Surfaces stay dark enough for the white lines
+    // and the yellow ball to read (checked in tests/meta_test.js); lines are never recoloured.
+    // 'arena' follows the player's current arena.
+    court: [
+      { id: 'arena', name: "Couleur d'arène", surface: null, price: 0 },
+      { id: 'clay', name: 'Terre battue', surface: '#b0522a', price: 0, unlock: 'arena' },
+      { id: 'grass', name: 'Gazon', surface: '#5f9a00', price: 0, unlock: 'arena' },
+      { id: 'hard', name: 'Dur bleu', surface: '#2f6db0', price: 0, unlock: 'arena' },
+      { id: 'indoor', name: 'Indoor', surface: '#3b4f8a', price: 0, unlock: 'arena' },
+      { id: 'central', name: 'Central', surface: '#1f6b4a', price: 0, unlock: 'arena' },
+      { id: 'emerald', name: 'Émeraude', surface: '#1d7a55', price: 200 },
+      { id: 'royal', name: 'Royal', surface: '#24418f', price: 250 },
+      { id: 'night', name: 'Nuit', surface: '#2a2350', price: 300 },
+      { id: 'rose', name: 'Rose', surface: '#a8466e', price: 300 },
+      { id: 'aurora', name: 'Aurore', surface: '#245e6b', price: 0, unlock: 'pass' },
+      { id: 'sunset', name: 'Couchant', surface: '#9a4a2c', price: 0, unlock: 'pass' },
+      { id: 'gold', name: 'Court doré', surface: '#7a5a12', price: 0, unlock: 'pass' },
+    ],
   };
   for (const kind of ['shirt', 'shorts']) {
     CATALOG[kind] = CATALOG.cloth.map((item) => ({
@@ -54,13 +72,13 @@
   for (const kind of Object.keys(CATALOG)) for (const item of CATALOG[kind]) {
     item.price = item.price || 0;
     item.currency = 'coins';
-    item.rarity = item.price >= 180 ? 'epic' : item.price >= 100 ? 'rare' : 'common';
-    item.unlock = item.price ? 'shop' : 'starter';
+    item.rarity = item.unlock === 'pass' ? 'legendary' : item.price >= 180 ? 'epic' : item.price >= 100 ? 'rare' : 'common';
+    item.unlock = item.unlock || (item.price ? 'shop' : 'starter');
   }
-  const DEFAULT = [{ cloth: 'white', hair: 'brown', racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none' },
-    { cloth: 'white', hair: 'blond', racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none' }];
-  const STARTER_OWNED = { racket: ['classic'], shirt: ['white'], shorts: ['white'], cap: ['none'] };
-  const SHOP_KINDS = ['racket', 'shirt', 'shorts', 'cap'];
+  const DEFAULT = [{ cloth: 'white', hair: 'brown', racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none', court: 'arena' },
+    { cloth: 'white', hair: 'blond', racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none', court: 'arena' }];
+  const STARTER_OWNED = { racket: ['classic'], shirt: ['white'], shorts: ['white'], cap: ['none'], court: ['arena'] };
+  const SHOP_KINDS = ['racket', 'shirt', 'shorts', 'cap', 'court'];
   const COINS_WIN = 100;
 
   const find = (kind, id) => CATALOG[kind] && CATALOG[kind].find((it) => it.id === id) || null;
@@ -73,6 +91,7 @@
       shirt: find('shirt', l.shirt) ? l.shirt : find('shirt', cloth) ? cloth : d.shirt,
       shorts: find('shorts', l.shorts) ? l.shorts : find('shorts', cloth) ? cloth : d.shorts,
       cap: find('cap', l.cap) ? l.cap : d.cap,
+      court: find('court', l.court) ? l.court : d.court,
     };
   }
   function inventory(owned) {
@@ -80,15 +99,24 @@
     for (const kind of SHOP_KINDS) out[kind] = Array.from(new Set([...(STARTER_OWNED[kind] || []), ...((owned && owned[kind]) || [])]));
     return out;
   }
-  function owns(owned, kind, id) {
+  // arenaIdx: highest arena reached (arena courts unlock with it).
+  function owns(owned, kind, id, arenaIdx) {
     if (kind === 'cloth' || kind === 'hair') return !!find(kind, id);
     const item = find(kind, id);
-    return !!item && (item.price === 0 || inventory(owned)[kind]?.includes(id));
+    if (!item) return false;
+    if (item.unlock === 'starter') return true;
+    if (item.unlock === 'arena') return CATALOG.court.filter((c) => c.unlock === 'arena').indexOf(item) <= (arenaIdx || 0);
+    return !!inventory(owned)[kind]?.includes(id);
+  }
+  // The surface colour to draw for a look; arenaCourt is the id of the player's current arena court.
+  function courtSurface(look, arenaCourt) {
+    const id = look && look.court && look.court !== 'arena' ? look.court : arenaCourt || 'grass';
+    return (find('court', id) || find('court', 'grass')).surface;
   }
   function random(rnd) {
     const pick = (a) => a[Math.floor((rnd || Math.random)() * a.length)].id;
-    return { cloth: pick(CATALOG.cloth), hair: pick(CATALOG.hair), racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none' };
+    return { cloth: pick(CATALOG.cloth), hair: pick(CATALOG.hair), racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none', court: 'arena' };
   }
 
-  return { CATALOG, DEFAULT, STARTER_OWNED, SHOP_KINDS, COINS_WIN, find, sanitize, inventory, owns, random };
+  return { CATALOG, DEFAULT, STARTER_OWNED, SHOP_KINDS, COINS_WIN, find, sanitize, inventory, owns, courtSurface, random };
 });

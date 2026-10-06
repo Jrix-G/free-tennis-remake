@@ -29,6 +29,28 @@
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
 
+  const EVENTS = ['', 'fast', 'energy', 'classic'];
+  function matchConstants(opts) {
+    const ev = EVENTS.includes(opts.event) ? opts.event : '';
+    const deck = [0, 1].map((i) => (ev === 'classic' ? [] : Cards.validDeck(opts.decks && opts.decks[i])));
+    const lv = [0, 1].map((i) => deck[i].map((_, j) => Cards.clampLevel(opts.levels && opts.levels[i] && opts.levels[i][j])));
+    return { deck, lv, ev };
+  }
+  // Fields that never change during a match: the server sends them once ('match' message) and leaves
+  // them out of every snapshot; the client puts them back with applyConstants.
+  const ABILITIES = ['forehand', 'backhand', 'serve', 'footwork', 'netplay', 'tech'];
+  const MATCH_KEYS = ['deck', 'lv', 'ev', 'pname', 'ctrl', 'match_mode'].concat(ABILITIES);
+  function constantsOf(G) {
+    const c = { ab: G.P.map((p) => ABILITIES.map((k) => p[k])) };
+    for (const k of MATCH_KEYS) if (k in G) c[k] = G[k];
+    return c;
+  }
+  function applyConstants(g, c) {
+    for (const k of MATCH_KEYS) if (k in c) g[k] = c[k];
+    c.ab.forEach((a, i) => ABILITIES.forEach((k, j) => { g.P[i][k] = a[j]; }));
+    return g;
+  }
+
   function makePlayer(d) {
     return {
       vx: 0, vy: 0, stat: C.PS_WAIT, cnt: 0, wm: C.WM_WAIT, dest_x: 0, dest_y: 0, net_flg: 0,
@@ -36,11 +58,13 @@
       forehand: 20 + 1 * d[0], backhand: 20 + 0.5 * d[1], serve: 30 + 3 * d[2],
       footwork: 6 + 0.3 * d[3], netplay: d[4] || 0, tech: d[5] || 0,
       anim: 'wait', af: 1,
-      st: 100, sr: 0, fx: C.FX_NORMAL, en: 0, card: 0, cd: 0, bo: 0,
+      st: 100, sr: 0, fx: C.FX_NORMAL, en: 0, card: 0, cd: 0, bo: 0, kp: 0,
     };
   }
 
-  // opts: { names:[2], data:[[6],[6]], ctrl:['human','ai'|'human'], matchMode:0|1, seed }
+  // opts: { names:[2], data:[[6],[6]], ctrl:['human','ai'|'human'], matchMode:0|1, seed,
+  //         decks:[[ids],[ids]], levels:[[n],[n]], event:'' | 'fast' | 'energy' | 'classic' }
+  // deck, lv and ev are match constants: the server leaves them out of snapshots (MATCH_KEYS).
   function createMatch(opts) {
     const G = {
       seed: (opts.seed >>> 0) || 1, tick: 0,
@@ -53,7 +77,7 @@
       mes: { label: 'inplay', text: '', cnt: 0, f: 0 },
       space: { on: false, f: 1 },
       bound: { vx: 0, vy: 0, alpha: 0 },
-      pad: [null, null], prevSp: [false, false], deck: opts.deck || Cards.STARTER_DECK,
+      pad: [null, null], prevSp: [false, false], ...matchConstants(opts),
       over: false, events: [],
     };
     init_game(G);
@@ -105,22 +129,27 @@
     return { hori, vart, trig: !!k.sp, sprint: !!k.sh, topspin: !!k.tp, slice: !!k.sl, lob: !!k.lc, card: !!k.a, next: !!k.n, prev: !!k.p };
   }
 
+  // Deck keys are edge-triggered (kp: bit 1 = next held, bit 2 = prev held) so holding Q/E scrolls once.
   function useCard(G, pn, pad) {
-    const mc = G.P[pn];
-    if (pad.next) mc.card = (mc.card + 1) % G.deck.length;
-    if (pad.prev) mc.card = (mc.card + G.deck.length - 1) % G.deck.length;
+    const mc = G.P[pn], deck = G.deck[pn];
+    const kp = (pad.next ? 1 : 0) | (pad.prev ? 2 : 0), was = mc.kp || 0;
+    mc.kp = kp;
+    if (!deck.length) return;  // classic mode: no specials
+    if ((kp & 1) && !(was & 1)) mc.card = (mc.card + 1) % deck.length;
+    if ((kp & 2) && !(was & 2)) mc.card = (mc.card + deck.length - 1) % deck.length;
     if (!pad.card || mc.cd) return;
-    const c = Cards.find(G.deck[mc.card]);
+    const c = Cards.find(deck[mc.card]);
     if (!c || mc.en < c.cost) return;
+    const k = Cards.scale(G.lv[pn][mc.card]);  // 1.00 at level 1, capped small at max level
     mc.en -= c.cost; mc.cd = c.cooldown; emit(G, 'card');
-    if (c.id === 'second-wind') mc.st = Math.min(100, mc.st + 35);
-    else if (c.id === 'infinite-sprint') mc.bo = 180;
-    else if (c.id === 'wall') mc.bo = 60;
-    else if (c.id === 'focus') mc.st = Math.min(100, mc.st + 12);
+    if (c.id === 'second-wind') mc.st = Math.min(100, mc.st + Math.round(35 * k));
+    else if (c.id === 'infinite-sprint') mc.bo = Math.round(90 * k);
+    else if (c.id === 'wall') mc.bo = Math.round(60 * k);
+    else if (c.id === 'focus') mc.st = Math.min(100, mc.st + Math.round(12 * k));
     else if (c.id === 'net-rush') mc.vy += pn === 0 ? -55 : 55;
-    else if (c.id === 'return') mc.bo = 45;
-    else if (c.id === 'wrong-foot') G.P[1 - pn].bo = -45;
-    else if (c.id === 'heavy-ball') mc.bo = 30;
+    else if (c.id === 'return') mc.bo = Math.round(45 * k);
+    else if (c.id === 'wrong-foot') G.P[1 - pn].bo = -Math.round(45 * k);
+    else if (c.id === 'heavy-ball') mc.bo = Math.round(30 * k);
   }
 
   function recoverStamina(mc) {
@@ -361,6 +390,7 @@
     fx = fx || C.FX_NORMAL;
     if (fx === C.FX_TOPSPIN) speed *= 1.05;
     if (fx === C.FX_SLICE || fx === C.FX_DROP) speed *= 0.84;
+    if (G.ev === 'fast') speed *= 1.12;
     const n = dist / speed;
     const grav = fx === C.FX_LOB ? C.GRAVITY * 0.55 : fx === C.FX_SLICE || fx === C.FX_DROP ? C.GRAVITY * 1.18 : C.GRAVITY;
     const fall = n * (n - 1) * grav / 2;
@@ -368,7 +398,7 @@
     B.up = (fall - B.vh) / n;
     B.down = 0; B.bound = 0; B.fx = fx; B.fg = grav;
     G.rally_cnt++;
-    G.P[side].en = Math.min(10, G.P[side].en + 1);
+    G.P[side].en = Math.min(10, G.P[side].en + (G.ev === 'energy' ? 2 : 1));
     emit(G, 'hit');
   }
 
@@ -575,5 +605,5 @@
     '768524CLIJSTER', '979746GRAF', '887657SABATINI', '465999SANCHEZ', '364735DATEKIMI',
     '878620DAVENPO', '677999NAVRATIL', '786879HINGIS', '467338PIERCE', '567350SHARAPO', '466698NOVOTNA'];
 
-  return { C, createMatch, step, project, rnd, TDAT, start_wait, PTS };
+  return { C, createMatch, step, project, rnd, TDAT, start_wait, PTS, MATCH_KEYS, EVENTS, constantsOf, applyConstants };
 });

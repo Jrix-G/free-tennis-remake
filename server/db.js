@@ -6,11 +6,13 @@ const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const CO = require('../web/cosmetics.js');
 const PG = require('../web/progression.js');
+const M = require('../web/meta.js');
+const meta = require('./meta.js');
 
 const SESSION_DAYS = 365;
 const NAME_RE = /^[A-Za-z0-9À-ÿ_.\- ]{3,16}$/;
 
-function open(file) {
+function open(file, now) {  // now: clock override for tests
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
   db.exec(`
@@ -71,14 +73,11 @@ function open(file) {
     insert: db.prepare('INSERT INTO users (google_sub, email, name, name_key, look, created_at) VALUES (?, ?, ?, ?, ?, ?)'),
     setEmail: db.prepare('UPDATE users SET email = ? WHERE id = ?'),
     setProfile: db.prepare('UPDATE users SET name = ?, name_key = ?, look = ? WHERE id = ?'),
-    result: db.prepare('UPDATE users SET wins = wins + ?, losses = losses + ?, xp = xp + ?, elo = ?, coins = coins + ? WHERE id = ?'),
     setStats: db.prepare('UPDATE users SET stats = ? WHERE id = ?'),
     setOwned: db.prepare('UPDATE users SET owned = ? WHERE id = ?'),
     addInventory: db.prepare('INSERT OR IGNORE INTO inventory (user_id, kind, item_id, acquired_at) VALUES (?, ?, ?, ?)'),
     takeCoins: db.prepare('UPDATE users SET coins = coins - ? WHERE id = ? AND coins >= ?'),
     setLook: db.prepare('UPDATE users SET look = ? WHERE id = ?'),
-    top: db.prepare('SELECT * FROM users WHERE wins + losses > 0 ORDER BY elo DESC, wins DESC, id LIMIT ?'),
-    rank: db.prepare('SELECT COUNT(*) + 1 AS r FROM users WHERE wins + losses > 0 AND (elo > ? OR (elo = ? AND (wins > ? OR (wins = ? AND id < ?))))'),
     newSession: db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)'),
     session: db.prepare('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.expires_at > ?'),
     dropSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
@@ -90,6 +89,8 @@ function open(file) {
     for (const [kind, ids] of Object.entries(owned)) for (const itemId of ids || []) q.addInventory.run(u.id, kind, itemId, u.created_at);
   }
   q.purge.run(Date.now());
+  const mt = meta.install(db, now);
+  const arenaOf = (u) => M.arena(u.best_trophies || 0);
 
   function freeName(base) {  // "Joueur4821"-style default pseudo, never the real Google name
     for (;;) {
@@ -114,9 +115,9 @@ function open(file) {
       q.newSession.run(token, userId, Date.now() + SESSION_DAYS * 864e5);
       return token;
     },
-    userBySession(token) { return token ? q.session.get(token, Date.now()) || null : null; },
+    userBySession(token) { return token ? mt.fresh(q.session.get(token, Date.now())) : null; },
     dropSession(token) { if (token) q.dropSession.run(token); },
-    user(id) { return q.byId.get(id) || null; },
+    user(id) { return mt.fresh(q.byId.get(id)); },
     // Returns an error message, or null when saved.
     updateProfile(id, name, look) {
       name = String(name || '').trim().replace(/\s+/g, ' ');
@@ -129,16 +130,14 @@ function open(file) {
       if (look && look.cloth && !look.shirt && !look.shorts) raw.shirt = raw.shorts = look.cloth;  // legacy profile editor
       for (const kind of CO.SHOP_KINDS) {
         const itemId = raw[kind] || raw.cloth && CO.find(kind, raw.cloth) && raw.cloth;
-        if (itemId && !CO.owns(owned, kind, itemId)) return 'Article non débloqué : ' + kind;
+        if (itemId && !CO.owns(owned, kind, itemId, u && arenaOf(u))) return 'Article non débloqué : ' + kind;
       }
       const nextLook = CO.sanitize(raw, 0);
       q.setProfile.run(name, name.toLowerCase(), JSON.stringify(nextLook), id);
       return null;
     },
-    // Ranked result: W/L, XP, Elo and coins; only a completed win grants currency.
-    recordResult(id, won, newElo, coins) {
-      q.result.run(won ? 1 : 0, won ? 0 : 1, won ? PG.XP_WIN : PG.XP_LOSS, newElo, coins || 0, id);
-    },
+    // Ranked or event result; see meta.recordMatch.
+    recordMatch: mt.recordMatch,
     owned(id) { const u = q.byId.get(id); return u ? JSON.parse(u.owned || '{}') : {}; },
     shop(id, action, kind, itemId) {
       if (!CO.SHOP_KINDS.includes(kind)) return 'Catégorie invalide';
@@ -149,7 +148,7 @@ function open(file) {
       const owned = JSON.parse(u.owned || '{}');
       if (action === 'buy') {
         if (CO.owns(owned, kind, itemId)) return 'Article déjà possédé';
-        if (!item.price) return 'Article gratuit';
+        if (item.unlock !== 'shop') return item.unlock === 'pass' ? 'Article du pass de saison' : 'Article gratuit';
         db.exec('BEGIN IMMEDIATE');
         try {
           if (!q.takeCoins.run(item.price, id, item.price).changes) { db.exec('ROLLBACK'); return 'Pas assez de pièces'; }
@@ -161,7 +160,7 @@ function open(file) {
         return null;
       }
       if (action === 'equip') {
-        if (!CO.owns(owned, kind, itemId)) return 'Article non débloqué';
+        if (!CO.owns(owned, kind, itemId, arenaOf(u))) return 'Article non débloqué';
         const look = CO.sanitize(JSON.parse(u.look), 0);
         look[kind] = itemId;
         q.setLook.run(JSON.stringify(look), id);
@@ -176,8 +175,9 @@ function open(file) {
       q.setStats.run(JSON.stringify(stats), id);
       return null;
     },
-    leaderboard(limit) { return q.top.all(limit); },
-    rank(u) { return u.wins + u.losses > 0 ? q.rank.get(u.elo, u.elo, u.wins, u.wins, u.id).r : null; },
+    leaderboard: mt.top,
+    rank: mt.rank,
+    meta: mt,
     close() { db.close(); },
   };
 }
@@ -189,6 +189,8 @@ function publicProfile(u) {
     name: u.name, look: CO.sanitize(JSON.parse(u.look), 0), wins: u.wins, losses: u.losses, elo: u.elo, xp: u.xp,
     level: lv.level, into: lv.into, need: lv.need, stats, points: PG.points(u.xp) - PG.spent(stats),
     coins: u.coins || 0, owned: CO.inventory(JSON.parse(u.owned || '{}')),
+    trophies: u.trophies || 0, best: u.best_trophies || 0, arena: M.arena(u.trophies || 0), bestArena: M.arena(u.best_trophies || 0),
+    gems: u.gems || 0, char: u.char || 'allround', played: u.played || 0,
   };
 }
 

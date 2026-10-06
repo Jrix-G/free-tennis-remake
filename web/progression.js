@@ -28,8 +28,9 @@
     return Array.isArray(stats) && stats.length === 4 &&
       stats.every((v) => Number.isInteger(v) && v >= BASE && v <= MAX) && spent(stats) <= points(xp);
   }
-  // The 6-value array TennisLogic expects ([..., netplay, tech] are AI-only).
-  const matchData = (stats) => (stats || START_STATS).concat([0, 0]);
+  // The 6-value array TennisLogic expects ([..., netplay, tech] are AI-only), plus an optional
+  // character bonus (one point on one ability, see TennisMeta.CHARACTERS).
+  const matchData = (stats, bonus) => (stats || START_STATS).map((v, i) => v + ((bonus && bonus[i]) || 0)).concat([0, 0]);
 
   // New ratings after a match; score 1 = a won, 0 = a lost.
   function elo(ra, rb, score) {

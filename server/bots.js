@@ -3,6 +3,7 @@
 'use strict';
 const crypto = require('crypto');
 const CO = require('../web/cosmetics.js');
+const Cards = require('../web/cards.js');
 
 const FIRST = ['Lucas', 'Hugo', 'Theo', 'Nathan', 'Louis', 'Enzo', 'Mathis', 'Tom', 'Jules', 'Leo', 'Noah', 'Adam',
   'Maxime', 'Antoine', 'Clement', 'Romain', 'Kevin', 'Yanis', 'Sami', 'Ines', 'Lea', 'Chloe', 'Emma', 'Manon',
@@ -29,12 +30,20 @@ function botName() {
 }
 
 // A credible opponent for this player: abilities within one point of theirs, a rating close to theirs.
-function botFor(stats, elo, level) {
-  const near = (v) => Math.max(1, Math.min(9, v + rnd(3) - 1));
+// A newcomer's first matches (played < 3) face a softer bot so the first wins come quickly.
+function botFor(h) {
+  const soft = (h.played || 0) < 3 ? 1 : 0;
+  const near = (v) => Math.max(1, Math.min(9, v + rnd(3) - 1 - soft));
+  const ids = Cards.CARDS.map((c) => c.id);
+  const deck = [];
+  while (deck.length < Cards.DECK_SIZE) { const id = pick(ids); if (!deck.includes(id)) deck.push(id); }
+  const avg = h.levels && h.levels.length ? Math.round(h.levels.reduce((a, b) => a + b, 0) / h.levels.length) : 1;
   return {
-    stats: stats.map(near),
-    elo: Math.max(100, (elo || 1000) + rnd(121) - 60),
-    level: Math.max(1, (level || 1) + rnd(5) - 2),
+    stats: h.stats.map(near),
+    elo: Math.max(100, (h.elo || 1000) + rnd(121) - 60),
+    level: Math.max(1, (h.level || 1) + rnd(5) - 2),
+    trophies: Math.max(0, (h.trophies || 0) + rnd(81) - 40),
+    deck, levels: deck.map(() => Cards.clampLevel(avg + rnd(3) - 1)),
   };
 }
 

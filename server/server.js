@@ -15,6 +15,7 @@ const L = require('../web/game.js');
 const CO = require('../web/cosmetics.js');
 const PG = require('../web/progression.js');
 const Cards = require('../web/cards.js');
+const M = require('../web/meta.js');
 const bots = require('./bots.js');
 const { verifyGoogleToken } = require('./auth.js');
 const { open: openDb, publicProfile } = require('./db.js');
@@ -107,7 +108,7 @@ class WS {
 // ---------- rooms ----------
 const rooms = new Map();      // code -> Room
 const clients = new Set();    // every open WS
-let quickRoom = null;         // public room waiting for its second player
+const waiting = {};           // event id ('' = ranked) -> public room waiting for its second player
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function newCode() {
@@ -119,8 +120,8 @@ function newCode() {
 }
 
 class Room {
-  constructor(isPublic) {
-    this.code = newCode(); this.isPublic = isPublic;
+  constructor(isPublic, event) {
+    this.code = newCode(); this.isPublic = isPublic; this.event = event || '';
     // slot: { token, ws, queue, last, ack, lastInput, goneAt, name, look, userId } or a bot { bot, name, look, stats }
     this.slots = [null, null];
     this.G = null; this.prevOverSp = [true, true]; this.started = false; this.wasOver = false;
@@ -130,20 +131,30 @@ class Room {
   newMatch() {
     const [a, b] = this.slots;  // everyone plays with their own unlocked abilities
     this.G = L.createMatch({
-      names: [a.name, b.name], data: [PG.matchData(a.stats), PG.matchData(b.stats)], ctrl: ['human', b.bot ? 'ai' : 'human'],
+      names: [a.name, b.name], data: [PG.matchData(a.stats, M.character(a.char).bonus), PG.matchData(b.stats, M.character(b.char).bonus)], ctrl: ['human', b.bot ? 'ai' : 'human'],
       matchMode: 0, seed: crypto.randomInt(2 ** 32 - 1) + 1,
+      decks: [a.deck, b.deck], levels: [a.levels, b.levels], event: this.event,
     });
+    this.sendMatch();
     this.prevOverSp = [true, true]; this.wasOver = false; this.recorded = false;
-    for (const s of this.slots) if (s) s.touched = false;
+    for (const s of this.slots) if (s) { s.touched = false; s.cardsUsed = 0; }
+  }
+  sendMatch(ws) {  // match constants, left out of snapshots
+    if (!this.G) return;
+    const m = Object.assign({ t: 'match' }, L.constantsOf(this.G));
+    if (ws) return ws.send(m);
+    for (const s of this.slots) if (s && s.ws) s.ws.send(m);
   }
   attach(ws, idx, token) {
     let s = this.slots[idx];
     if (!s) s = this.slots[idx] = { token: token || crypto.randomBytes(9).toString('base64url'), queue: [], last: {}, ack: 0 };
     if (s.ws && s.ws !== ws) { s.ws.room = null; s.ws.close(); }  // a newer tab takes the slot
     Object.assign(s, { ws, goneAt: 0, lastInput: Date.now(), queue: [], name: ws.name, look: ws.look, userId: ws.userId,
-      stats: ws.stats, elo: ws.elo, level: ws.level, coins: ws.coins, owned: ws.owned });
+      stats: ws.stats, elo: ws.elo, level: ws.level, coins: ws.coins, owned: ws.owned,
+      deck: ws.deck, levels: ws.levels, char: ws.char, trophies: ws.trophies });
     ws.room = this; ws.idx = idx;
-    ws.send({ t: 'room', code: this.code, me: idx, token: s.token, public: this.isPublic });
+    ws.send({ t: 'room', code: this.code, me: idx, token: s.token, public: this.isPublic, event: this.event });
+    if (this.started) this.sendMatch(ws);  // reconnection mid-match
     if (this.slots[0] && this.slots[1] && !this.started) this.start();
     this.notify();
   }
@@ -154,12 +165,12 @@ class Room {
   addBot() {
     const h = this.slots[0];
     this.slots[1] = Object.assign({ bot: true, name: bots.botName(), look: bots.botLook(), queue: [], last: {}, ack: 0 },
-      bots.botFor(h.stats, h.elo, h.level));
-    if (quickRoom === this) quickRoom = null;
+      bots.botFor(h));
+    if (waiting[this.event] === this) waiting[this.event] = null;
     this.start(); this.notify();
   }
   notify() {
-    const players = this.slots.map((s) => (s ? { name: s.name, look: s.look, elo: s.elo, level: s.level } : null));
+    const players = this.slots.map((s) => (s ? { name: s.name, look: s.look, elo: s.elo, level: s.level, trophies: s.trophies } : null));
     for (let i = 0; i < 2; i++) {
       const s = this.slots[i], o = this.slots[1 - i];
       if (s && s.ws) s.ws.send({ t: 'peer', on: !!(o && (o.ws || o.bot)), started: this.started, players });
@@ -184,7 +195,7 @@ class Room {
   }
   close() {
     rooms.delete(this.code);
-    if (quickRoom === this) quickRoom = null;
+    if (waiting[this.event] === this) waiting[this.event] = null;
     for (const s of this.slots) if (s && s.ws) s.ws.room = null;
   }
   input(ws, m) {
@@ -246,7 +257,9 @@ class Room {
       const active = this.G;  // a Space press may have created a rematch immediately above
       const before = active.P.map((p) => [p.vx, p.vy]);
       const rally = active.rally_cnt;
+      const cd = active.P.map((p) => p.cd);
       L.step(active, pads);
+      this.slots.forEach((s, i) => { if (s && active.P[i].cd > cd[i]) s.cardsUsed = (s.cardsUsed || 0) + 1; });
       if (this.isPublic) {
         this.slots.forEach((s, i) => {
           const p = active.P[i], moved = p.vx !== before[i][0] || p.vy !== before[i][1];
@@ -261,28 +274,31 @@ class Room {
       if (this.G.over && !this.wasOver) this.record(this.G.match_winner);
       this.wasOver = this.G.over;
     }
-    // Deck is match-constant and sent by the client default/catalogue; never spend snapshot bytes on it.
-    const g = JSON.stringify(this.G, (key, value) => key === 'deck' ? undefined : value);
+    // Match constants (names, abilities, decks, event...) went once in the 'match' message.
+    const g = JSON.stringify(this.G, (key, value) => (L.MATCH_KEYS.includes(key) ? undefined : value));
     for (let i = 0; i < 2; i++) {
       const s = this.slots[i];
       if (s && s.ws) s.ws.send('{"t":"snap","paused":' + paused + ',"ack":' + s.ack + ',"q":' + s.queue.length + ',"ev":' + JSON.stringify(ev) + ',"g":' + g + '}');
     }
   }
-  // Ranked result for logged-in players: W/L, XP, Elo. Only completed wins grant coins; guests count as 1000.
+  // Result for logged-in players (ranked: W/L, XP, Elo, trophies; event: coins only), plus chests, quests
+  // and pass XP. Only completed wins grant coins; guests count as 1000 Elo.
   record(winner, completed) {
     if (!this.isPublic || this.recorded) return;
     this.recorded = true;
     const ratings = this.slots.map((s) => (s.elo == null ? PG.START_ELO : s.elo));
-    const next = PG.elo(ratings[0], ratings[1], winner === 0 ? 1 : 0);
+    const next = this.event ? ratings : PG.elo(ratings[0], ratings[1], winner === 0 ? 1 : 0);
     this.slots.forEach((s, i) => {
       if (s.bot || !s.userId) return;
-      const coins = completed !== false && winner === i ? CO.COINS_WIN : 0;
-      db.recordResult(s.userId, winner === i, next[i], coins);
+      const sum = db.recordMatch(s.userId, {
+        won: winner === i, completed, newElo: next[i], event: this.event,
+        games: this.G ? this.G.gpoint[i] : 0, cards: s.cardsUsed || 0,
+      });
       const u = db.user(s.userId);
-      Object.assign(s, { elo: u.elo, level: PG.level(u.xp).level, coins: u.coins, owned: CO.inventory(JSON.parse(u.owned || '{}')) });
+      Object.assign(s, { elo: u.elo, level: PG.level(u.xp).level, coins: u.coins, owned: CO.inventory(JSON.parse(u.owned || '{}')), trophies: u.trophies });
       if (s.ws) {
-        Object.assign(s.ws, { elo: s.elo, level: s.level, coins: s.coins, owned: s.owned });
-        s.ws.send({ t: 'result', won: winner === i, elo: next[i] - ratings[i], xp: winner === i ? PG.XP_WIN : PG.XP_LOSS, coins });
+        identify(s.ws, u);
+        s.ws.send(Object.assign({ t: 'result', won: winner === i, elo: next[i] - ratings[i], xp: this.event ? 0 : winner === i ? PG.XP_WIN : PG.XP_LOSS }, sum));
         s.ws.send({ t: 'profile', profile: profileOf(u) });
       }
     });
@@ -296,10 +312,12 @@ function onMessage(ws, m) {
   if (m.t === 'in') { if (ws.room) ws.room.input(ws, m); return; }
   if (m.t === 'leave') { if (ws.room) ws.room.leave(ws); return; }
   if (ws.room) ws.room.leave(ws);  // any lobby action leaves the current room
-  if (m.t === 'quick') {
-    if (quickRoom && quickRoom.slots[0] && quickRoom.slots[0].ws) {
-      const r = quickRoom; quickRoom = null; r.attach(ws, 1);
-    } else { quickRoom = new Room(true); quickRoom.attach(ws, 0); }
+  if (m.t === 'quick') {  // ranked, or this weekend's event when asked for and running
+    const e = M.currentEvent(Date.now()), event = m.event && e && m.event === e.id ? e.id : '';
+    const w = waiting[event];
+    if (w && w.slots[0] && w.slots[0].ws) {
+      waiting[event] = null; w.attach(ws, 1);
+    } else { waiting[event] = new Room(true, event); waiting[event].attach(ws, 0); }
   } else if (m.t === 'create') {
     new Room(false).attach(ws, 0);
   } else if (m.t === 'join') {
@@ -308,7 +326,7 @@ function onMessage(ws, m) {
     const mine = r.slots.findIndex((s) => s && !s.bot && m.token && s.token === m.token);  // reconnection
     if (mine >= 0) return r.attach(ws, mine, m.token);
     if (r.slots[1]) return ws.send({ t: 'err', msg: 'Partie déjà complète' });
-    if (quickRoom === r) quickRoom = null;
+    if (waiting[r.event] === r) waiting[r.event] = null;
     r.attach(ws, 1);
   }
 }
@@ -344,12 +362,17 @@ function cookieToken(req) {
 function identify(ws, user) {
   ws.userId = user ? user.id : 0;
   ws.name = user ? user.name : ws.name || 'Invité' + crypto.randomInt(1000, 10000);
-  ws.look = user ? JSON.parse(user.look) : CO.sanitize({}, 0);
   ws.stats = user ? JSON.parse(user.stats) : PG.START_STATS.slice();  // guests keep the starting abilities
   ws.elo = user ? user.elo : null;
   ws.level = user ? PG.level(user.xp).level : null;
   ws.coins = user ? user.coins : 0;
   ws.owned = CO.inventory(user ? JSON.parse(user.owned || '{}') : {});
+  Object.assign(ws, user ? db.meta.matchLoadout(user)
+    : { deck: Cards.STARTER_DECK.slice(), levels: [1, 1, 1], char: 'allround', trophies: 0, played: 0 });
+  // 'arena' court skin resolves to the player's current arena court so the opponent draws it too.
+  const look = user ? CO.sanitize(JSON.parse(user.look), 0) : CO.sanitize({}, 0);
+  if (look.court === 'arena') look.court = M.ARENAS[M.arena(ws.trophies)].court;
+  ws.look = look;
 }
 const profileOf = (u) => Object.assign(publicProfile(u), { rank: db.rank(u) });
 function refreshUser(id) {  // profile edited or logged in elsewhere: update open sockets
@@ -358,7 +381,8 @@ function refreshUser(id) {  // profile edited or logged in elsewhere: update ope
     identify(ws, u);
     if (ws.room && ws.room.slots[ws.idx] && ws.room.slots[ws.idx].ws === ws) {
       const s = ws.room.slots[ws.idx];
-      Object.assign(s, { name: ws.name, look: ws.look, stats: ws.stats, elo: ws.elo, level: ws.level, coins: ws.coins, owned: ws.owned });
+      Object.assign(s, { name: ws.name, look: ws.look, stats: ws.stats, elo: ws.elo, level: ws.level, coins: ws.coins, owned: ws.owned,
+        deck: ws.deck, levels: ws.levels, char: ws.char, trophies: ws.trophies });
       ws.room.notify();
     }
     ws.send({ t: 'profile', profile: profileOf(u) });
@@ -390,9 +414,19 @@ async function api(req, res, pathname) {
   const user = db.userBySession(cookieToken(req));
   if (pathname === '/api/config' && req.method === 'GET') return json(res, 200, { googleClientId: GOOGLE_CLIENT_ID || null });
   if (pathname === '/api/me' && req.method === 'GET') return json(res, 200, { profile: user ? profileOf(user) : null });
-  if (pathname === '/api/leaderboard' && req.method === 'GET') {
-    const row = (u, rank) => ({ rank, name: u.name, elo: u.elo, wins: u.wins, losses: u.losses, level: PG.level(u.xp).level, look: JSON.parse(u.look) });
+  if (pathname === '/api/leaderboard' && req.method === 'GET') {  // ?type=weekly|clubs, trophies by default
+    const type = new URL(req.url, 'http://x').searchParams.get('type');
+    if (type === 'weekly') return json(res, 200, { top: db.meta.weeklyTop(20).map((r, i) => ({ rank: i + 1, name: r.name, trophies: r.trophies, wins: r.wins, look: JSON.parse(r.look) })) });
+    if (type === 'clubs') return json(res, 200, { top: db.meta.clubs('').map((c, i) => ({ rank: i + 1, name: c.name, trophies: c.trophies, members: c.members })) });
+    const row = (u, rank) => ({ rank, name: u.name, trophies: u.trophies, elo: u.elo, wins: u.wins, losses: u.losses, level: PG.level(u.xp).level, look: JSON.parse(u.look) });
     return json(res, 200, { top: db.leaderboard(20).map((u, i) => row(u, i + 1)), me: user && db.rank(user) ? row(user, db.rank(user)) : null });
+  }
+  if (pathname === '/api/meta' && req.method === 'GET') {
+    if (!user) return json(res, 401, { error: 'Non connecté' });
+    return json(res, 200, db.meta.view(user.id));
+  }
+  if (pathname === '/api/clubs' && req.method === 'GET') {
+    return json(res, 200, { clubs: db.meta.clubs(new URL(req.url, 'http://x').searchParams.get('q') || '') });
   }
   if (req.method !== 'POST') return json(res, 405, { error: 'method' });
   let body;
@@ -431,6 +465,29 @@ async function api(req, res, pathname) {
     if (err) return json(res, 400, { error: err });
     refreshUser(user.id);
     return json(res, 200, { profile: profileOf(db.user(user.id)) });
+  }
+  if (pathname === '/api/meta') {  // every meta-game action: { action, ... }
+    if (!user) return json(res, 401, { error: 'Non connecté' });
+    const mt = db.meta, id = user.id, a = body.action;
+    let err = null, extra = {};
+    if (a === 'deck') err = mt.setDeck(id, body.deck);
+    else if (a === 'upgrade') err = mt.upgradeCard(id, String(body.card));
+    else if (a === 'char') err = mt.setChar(id, String(body.char));
+    else if (a === 'chest-start') err = mt.startChest(id, Number(body.id));
+    else if (a === 'chest-open') { const r = mt.openChest(id, Number(body.id), !!body.gems); err = r.error || null; extra = { reward: r.reward }; }
+    else if (a === 'quest') err = mt.claimQuest(id, Number(body.slot));
+    else if (a === 'login') err = mt.claimLogin(id);
+    else if (a === 'pass') err = mt.claimPass(id, Number(body.tier), !!body.premium);
+    else if (a === 'pass-buy') err = mt.buyPass(id);
+    else if (a === 'club-create') err = mt.createClub(id, body.name);
+    else if (a === 'club-join') err = mt.joinClub(id, Number(body.id));
+    else if (a === 'club-leave') err = mt.leaveClub(id);
+    else if (a === 'club-say') err = mt.postMessage(id, body.text);
+    else if (a === 'club-donate') err = mt.donate(id, Number(body.to), String(body.card));
+    else err = 'Action inconnue';
+    if (err) return json(res, 400, { error: err });
+    refreshUser(id);
+    return json(res, 200, Object.assign({ meta: mt.view(id), profile: profileOf(db.user(id)) }, extra));
   }
   return json(res, 404, { error: 'not found' });
 }
