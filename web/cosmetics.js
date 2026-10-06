@@ -46,7 +46,7 @@
     court: [
       { id: 'arena', name: "Couleur d'arène", surface: null, price: 0 },
       { id: 'clay', name: 'Terre battue', surface: '#b0522a', price: 0, unlock: 'arena' },
-      { id: 'grass', name: 'Gazon', surface: '#5f9a00', price: 0, unlock: 'arena' },
+      { id: 'grass', name: 'Gazon', surface: '#6cac00', price: 0, unlock: 'arena' },
       { id: 'hard', name: 'Dur bleu', surface: '#2f6db0', price: 0, unlock: 'arena' },
       { id: 'indoor', name: 'Indoor', surface: '#3b4f8a', price: 0, unlock: 'arena' },
       { id: 'central', name: 'Central', surface: '#1f6b4a', price: 0, unlock: 'arena' },
@@ -113,10 +113,29 @@
     const id = look && look.court && look.court !== 'arena' ? look.court : arenaCourt || 'grass';
     return (find('court', id) || find('court', 'grass')).surface;
   }
+  // Daily offers: 6 shop items at -20 %, the same for everyone on a given Paris day (dayKey 'YYYY-MM-DD').
+  const OFFER_COUNT = 6, OFFER_DISCOUNT = 0.8;
+  function dailyOffers(day) {
+    let h = 2166136261;
+    for (let i = 0; i < day.length; i++) h = Math.imul(h ^ day.charCodeAt(i), 16777619);
+    const pool = [];
+    for (const kind of SHOP_KINDS) for (const it of CATALOG[kind]) if (it.unlock === 'shop') pool.push([kind, it.id]);
+    const out = [];
+    while (out.length < OFFER_COUNT && pool.length) {
+      h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+      out.push(pool.splice(h % pool.length, 1)[0]);
+    }
+    return out;
+  }
+  function priceOn(kind, id, day) {
+    const it = find(kind, id);
+    if (!it) return 0;
+    return dailyOffers(day).some(([k, i]) => k === kind && i === id) ? Math.round(it.price * OFFER_DISCOUNT) : it.price;
+  }
   function random(rnd) {
     const pick = (a) => a[Math.floor((rnd || Math.random)() * a.length)].id;
     return { cloth: pick(CATALOG.cloth), hair: pick(CATALOG.hair), racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none', court: 'arena' };
   }
 
-  return { CATALOG, DEFAULT, STARTER_OWNED, SHOP_KINDS, COINS_WIN, find, sanitize, inventory, owns, courtSurface, random };
+  return { CATALOG, DEFAULT, STARTER_OWNED, SHOP_KINDS, COINS_WIN, find, sanitize, inventory, owns, courtSurface, dailyOffers, priceOn, random };
 });

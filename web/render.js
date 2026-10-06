@@ -1,7 +1,7 @@
 // Canvas drawing: court, players, ball, menu scenery. All art is procedural (no original assets).
 (function (root) {
   'use strict';
-  const L = root.TennisLogic, C = L.C;
+  const L = root.TennisLogic, C = L.C, CO = root.TennisCosmetics;
   const FONT = '"Arial Rounded MT Bold","Trebuchet MS","Segoe UI",Verdana,sans-serif';
   const GRASS = '#6cac00', GRASS_DARK = '#61990a';
 
@@ -29,13 +29,16 @@
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
 
-  // ---------- court (cached) ----------
-  let courtCache = null;
-  function courtCanvas() {
-    if (courtCache) return courtCache;
+  // ---------- court (pre-rendered once per pair of half-court skins) ----------
+  const courtCache = new Map();
+  function courtCanvas(near, far) {
+    near = near || GRASS; far = far || GRASS;
+    const key = near + far;
+    if (courtCache.has(key)) return courtCache.get(key);
     const c = document.createElement('canvas'); c.width = 600; c.height = 600;
     const g = c.getContext('2d');
-    g.fillStyle = GRASS; g.fillRect(0, 0, 600, 600);
+    g.fillStyle = near; g.fillRect(0, 0, 600, 600);
+    g.fillStyle = far; g.fillRect(0, 0, 600, C.SCREEN_OY);  // the far half ends at the net
     // mown stripes converging towards a far vanishing point
     const vpx = 300, vpy = -2600;
     for (let i = -14; i <= 14; i += 2) {
@@ -54,7 +57,8 @@
     line(-W, -S, W, -S); line(-W, S, W, S);
     line(0, -S, 0, S);
     line(0, -H, 0, -H + 18); line(0, H, 0, H - 18);
-    courtCache = c;
+    if (courtCache.size > 8) courtCache.clear();
+    courtCache.set(key, c);
     return c;
   }
 
@@ -191,7 +195,7 @@
   // look: { cloth, hair } cosmetic ids (cosmetics.js); defaults to the original colors of side hairIdx.
   function drawPlayer(ctx, x, y, scale, anim, af, facing, hairIdx, look) {
     const p = pose(anim, af, facing), back = facing === 'back';
-    const CO = root.TennisCosmetics, lk = CO.sanitize(look, hairIdx || 0);
+    const lk = CO.sanitize(look, hairIdx || 0);
     const shirtIt = CO.find('shirt', lk.shirt), shortsIt = CO.find('shorts', lk.shorts);
     const racketIt = CO.find('racket', lk.racket), capIt = CO.find('cap', lk.cap);
     const cloth = shirtIt.color, clothD = shirtIt.shade, shorts = shortsIt.color, shortsD = shortsIt.shade;
@@ -274,7 +278,8 @@
   function drawGame(ctx, g, flip, prev, alpha, looks, outTicks) {
     const s = flip ? -1 : 1;
     const lerp = (a, b) => (prev && alpha < 1 ? b + (a - b) * (1 - alpha) : b);
-    ctx.drawImage(courtCanvas(), 0, 0);
+    const surf = (i) => looks && looks[i] && CO.courtSurface(looks[i]);
+    ctx.drawImage(courtCanvas(surf(flip ? 1 : 0), surf(flip ? 0 : 1)), 0, 0);
     const pl = [0, 1].map((i) => {
       const mc = g.P[i], pm = prev && prev.P[i];
       const vx = pm ? lerp(pm.vx, mc.vx) : mc.vx, vy = pm ? lerp(pm.vy, mc.vy) : mc.vy;

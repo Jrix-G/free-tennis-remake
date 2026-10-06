@@ -44,7 +44,7 @@
       ws.onmessage = (e) => this.onMsg(JSON.parse(e.data));
     }
     send(o) { if (this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); }
-    quick() { this.send({ t: 'quick' }); }
+    quick(event) { this.send(event ? { t: 'quick', event } : { t: 'quick' }); }
     create() { this.send({ t: 'create' }); }
     join(code, token) { this.err = null; this.send({ t: 'join', code, token }); }
     leave() { this.send({ t: 'leave' }); this.reset(); }

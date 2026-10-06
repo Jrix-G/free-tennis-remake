@@ -149,9 +149,10 @@ function open(file, now) {  // now: clock override for tests
       if (action === 'buy') {
         if (CO.owns(owned, kind, itemId)) return 'Article déjà possédé';
         if (item.unlock !== 'shop') return item.unlock === 'pass' ? 'Article du pass de saison' : 'Article gratuit';
+        const price = CO.priceOn(kind, itemId, M.dayKey(now ? now() : Date.now()));
         db.exec('BEGIN IMMEDIATE');
         try {
-          if (!q.takeCoins.run(item.price, id, item.price).changes) { db.exec('ROLLBACK'); return 'Pas assez de pièces'; }
+          if (!q.takeCoins.run(price, id, price).changes) { db.exec('ROLLBACK'); return 'Pas assez de pièces'; }
           owned[kind] = Array.from(new Set([...(owned[kind] || []), itemId]));
           q.setOwned.run(JSON.stringify(owned), id);
           q.addInventory.run(id, kind, itemId, Date.now());

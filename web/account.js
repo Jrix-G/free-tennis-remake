@@ -17,7 +17,7 @@
   }
   function setProfile(p) {
     profile = p || null;
-    $('acct-btn').textContent = profile ? profile.name + '  ·  ' + profile.elo + (profile.points ? '  ·  +' + profile.points : '') : 'Se connecter';
+    $('acct-btn').textContent = profile ? profile.name + '  ·  🏆 ' + profile.trophies + (profile.points ? '  ·  +' + profile.points : '') : 'Se connecter';
     $('acct-btn').classList.toggle('in', !!profile);
     listeners.forEach((f) => f(profile));
   }
@@ -141,8 +141,22 @@
     return p;
   }
 
+  // Meta-game (chests, quests, deck, pass, club): GET the whole state, POST one action.
+  let metaState = null;
+  async function meta() {
+    if (!profile) return (metaState = null);
+    metaState = await call('/api/meta');
+    return metaState;
+  }
+  async function act(action, extra) {
+    const j = await call('/api/meta', Object.assign({ action }, extra));
+    metaState = j.meta; setProfile(j.profile);
+    return j;
+  }
+
   root.TennisAccount = {
-    init, open, close, isOpen, shop,
+    init, open, close, isOpen, shop, meta, act,
+    get metaState() { return metaState; },
     get profile() { return profile; },
     look() { return profile ? profile.look : null; },
     onChange(f) { listeners.push(f); },
