@@ -31,12 +31,39 @@ function open(file) {
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS inventory (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      acquired_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, kind, item_id)
+    );
+    CREATE TABLE IF NOT EXISTS user_cards (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      card_id TEXT NOT NULL, level INTEGER NOT NULL DEFAULT 1, copies INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, card_id)
+    );
+    CREATE TABLE IF NOT EXISTS chests (
+      id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL, seed INTEGER NOT NULL, opens_at INTEGER NOT NULL, claimed_at INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS daily_quests (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, day_key TEXT NOT NULL,
+      slot INTEGER NOT NULL, kind TEXT NOT NULL, goal INTEGER NOT NULL, progress INTEGER NOT NULL DEFAULT 0,
+      claimed_at INTEGER, PRIMARY KEY (user_id, day_key, slot)
+    );
+    CREATE TABLE IF NOT EXISTS daily_claims (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, day_key TEXT NOT NULL,
+      streak INTEGER NOT NULL DEFAULT 0, claimed_at INTEGER NOT NULL, PRIMARY KEY (user_id, day_key)
+    );
   `);
   // columns added after the first release
   const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
   if (!cols.includes('elo')) db.exec('ALTER TABLE users ADD COLUMN elo INTEGER NOT NULL DEFAULT ' + PG.START_ELO);
   if (!cols.includes('xp')) db.exec('ALTER TABLE users ADD COLUMN xp INTEGER NOT NULL DEFAULT 0');
   if (!cols.includes('stats')) db.exec("ALTER TABLE users ADD COLUMN stats TEXT NOT NULL DEFAULT '" + JSON.stringify(PG.START_STATS) + "'");
+  if (!cols.includes('coins')) db.exec('ALTER TABLE users ADD COLUMN coins INTEGER NOT NULL DEFAULT 0');
+  if (!cols.includes('owned')) db.exec("ALTER TABLE users ADD COLUMN owned TEXT NOT NULL DEFAULT '{}'");
   const q = {
     bySub: db.prepare('SELECT * FROM users WHERE google_sub = ?'),
     byId: db.prepare('SELECT * FROM users WHERE id = ?'),
@@ -44,8 +71,12 @@ function open(file) {
     insert: db.prepare('INSERT INTO users (google_sub, email, name, name_key, look, created_at) VALUES (?, ?, ?, ?, ?, ?)'),
     setEmail: db.prepare('UPDATE users SET email = ? WHERE id = ?'),
     setProfile: db.prepare('UPDATE users SET name = ?, name_key = ?, look = ? WHERE id = ?'),
-    result: db.prepare('UPDATE users SET wins = wins + ?, losses = losses + ?, xp = xp + ?, elo = ? WHERE id = ?'),
+    result: db.prepare('UPDATE users SET wins = wins + ?, losses = losses + ?, xp = xp + ?, elo = ?, coins = coins + ? WHERE id = ?'),
     setStats: db.prepare('UPDATE users SET stats = ? WHERE id = ?'),
+    setOwned: db.prepare('UPDATE users SET owned = ? WHERE id = ?'),
+    addInventory: db.prepare('INSERT OR IGNORE INTO inventory (user_id, kind, item_id, acquired_at) VALUES (?, ?, ?, ?)'),
+    takeCoins: db.prepare('UPDATE users SET coins = coins - ? WHERE id = ? AND coins >= ?'),
+    setLook: db.prepare('UPDATE users SET look = ? WHERE id = ?'),
     top: db.prepare('SELECT * FROM users WHERE wins + losses > 0 ORDER BY elo DESC, wins DESC, id LIMIT ?'),
     rank: db.prepare('SELECT COUNT(*) + 1 AS r FROM users WHERE wins + losses > 0 AND (elo > ? OR (elo = ? AND (wins > ? OR (wins = ? AND id < ?))))'),
     newSession: db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)'),
@@ -53,6 +84,11 @@ function open(file) {
     dropSession: db.prepare('DELETE FROM sessions WHERE token = ?'),
     purge: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
   };
+  // Additive backfill for accounts created before the normalized inventory table.
+  for (const u of db.prepare('SELECT id, owned, created_at FROM users').all()) {
+    const owned = JSON.parse(u.owned || '{}');
+    for (const [kind, ids] of Object.entries(owned)) for (const itemId of ids || []) q.addInventory.run(u.id, kind, itemId, u.created_at);
+  }
   q.purge.run(Date.now());
 
   function freeName(base) {  // "Joueur4821"-style default pseudo, never the real Google name
@@ -87,12 +123,51 @@ function open(file) {
       if (!NAME_RE.test(name)) return 'Pseudo : 3 à 16 caractères (lettres, chiffres, espace, _ . -)';
       const taken = q.nameTaken.get(name.toLowerCase());
       if (taken && taken.id !== id) return 'Ce pseudo est déjà pris';
-      q.setProfile.run(name, name.toLowerCase(), JSON.stringify(CO.sanitize(look, 0)), id);
+      const u = q.byId.get(id), owned = u ? JSON.parse(u.owned || '{}') : {};
+      const current = u ? CO.sanitize(JSON.parse(u.look), 0) : CO.sanitize({}, 0);
+      const raw = Object.assign({}, current, look || {});
+      if (look && look.cloth && !look.shirt && !look.shorts) raw.shirt = raw.shorts = look.cloth;  // legacy profile editor
+      for (const kind of CO.SHOP_KINDS) {
+        const itemId = raw[kind] || raw.cloth && CO.find(kind, raw.cloth) && raw.cloth;
+        if (itemId && !CO.owns(owned, kind, itemId)) return 'Article non débloqué : ' + kind;
+      }
+      const nextLook = CO.sanitize(raw, 0);
+      q.setProfile.run(name, name.toLowerCase(), JSON.stringify(nextLook), id);
       return null;
     },
-    // Ranked result: W/L, XP and the new Elo rating.
-    recordResult(id, won, newElo) {
-      q.result.run(won ? 1 : 0, won ? 0 : 1, won ? PG.XP_WIN : PG.XP_LOSS, newElo, id);
+    // Ranked result: W/L, XP, Elo and coins; only a completed win grants currency.
+    recordResult(id, won, newElo, coins) {
+      q.result.run(won ? 1 : 0, won ? 0 : 1, won ? PG.XP_WIN : PG.XP_LOSS, newElo, coins || 0, id);
+    },
+    owned(id) { const u = q.byId.get(id); return u ? JSON.parse(u.owned || '{}') : {}; },
+    shop(id, action, kind, itemId) {
+      if (!CO.SHOP_KINDS.includes(kind)) return 'Catégorie invalide';
+      const item = CO.find(kind, itemId);
+      if (!item) return 'Article inconnu';
+      const u = q.byId.get(id);
+      if (!u) return 'Compte introuvable';
+      const owned = JSON.parse(u.owned || '{}');
+      if (action === 'buy') {
+        if (CO.owns(owned, kind, itemId)) return 'Article déjà possédé';
+        if (!item.price) return 'Article gratuit';
+        db.exec('BEGIN IMMEDIATE');
+        try {
+          if (!q.takeCoins.run(item.price, id, item.price).changes) { db.exec('ROLLBACK'); return 'Pas assez de pièces'; }
+          owned[kind] = Array.from(new Set([...(owned[kind] || []), itemId]));
+          q.setOwned.run(JSON.stringify(owned), id);
+          q.addInventory.run(id, kind, itemId, Date.now());
+          db.exec('COMMIT');
+        } catch (e) { db.exec('ROLLBACK'); throw e; }
+        return null;
+      }
+      if (action === 'equip') {
+        if (!CO.owns(owned, kind, itemId)) return 'Article non débloqué';
+        const look = CO.sanitize(JSON.parse(u.look), 0);
+        look[kind] = itemId;
+        q.setLook.run(JSON.stringify(look), id);
+        return null;
+      }
+      return 'Action invalide';
     },
     // Returns an error message, or null when saved.
     setStats(id, stats) {
@@ -111,8 +186,9 @@ function open(file) {
 function publicProfile(u) {
   const lv = PG.level(u.xp), stats = JSON.parse(u.stats);
   return {
-    name: u.name, look: JSON.parse(u.look), wins: u.wins, losses: u.losses, elo: u.elo, xp: u.xp,
+    name: u.name, look: CO.sanitize(JSON.parse(u.look), 0), wins: u.wins, losses: u.losses, elo: u.elo, xp: u.xp,
     level: lv.level, into: lv.into, need: lv.need, stats, points: PG.points(u.xp) - PG.spent(stats),
+    coins: u.coins || 0, owned: CO.inventory(JSON.parse(u.owned || '{}')),
   };
 }
 

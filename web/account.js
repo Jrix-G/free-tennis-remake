@@ -76,7 +76,11 @@
       const b = document.createElement('button');
       b.className = 'sw' + (draft.look[kind] === it.id ? ' on' : '');
       b.style.background = it.color; b.title = it.name; b.setAttribute('aria-label', it.name);
-      b.onclick = () => { draft.look[kind] = it.id; swatches(kind); preview(); };
+      b.onclick = () => {
+        draft.look[kind] = it.id;
+        if (kind === 'cloth') { draft.look.shirt = it.id; draft.look.shorts = it.id; }
+        swatches(kind); preview();
+      };
       box.appendChild(b);
     }
   }
@@ -111,7 +115,7 @@
     $('acct-title').textContent = 'Mon compte';
     draft = { name: profile.name, look: CO.sanitize(profile.look, 0), stats: profile.stats.slice() };
     $('acct-name').value = draft.name;
-    $('acct-stats').textContent = 'Victoires : ' + profile.wins + '   ·   Défaites : ' + profile.losses;
+    $('acct-stats').textContent = 'Victoires : ' + profile.wins + '   ·   Défaites : ' + profile.losses + '   ·   ' + profile.coins + ' pièces';
     $('acct-level').textContent = 'Niveau ' + profile.level + '   ·   Elo ' + profile.elo + (profile.rank ? '   ·   #' + profile.rank + ' au classement' : '');
     $('acct-xp').style.width = Math.round(100 * profile.into / profile.need) + '%';
     $('acct-xptxt').textContent = profile.into + ' / ' + profile.need + ' XP';
@@ -131,8 +135,14 @@
     };
   }
 
+  async function shop(action, kind, id) {
+    const p = (await call('/api/shop', { action, kind, id })).profile;
+    setProfile(p);
+    return p;
+  }
+
   root.TennisAccount = {
-    init, open, close, isOpen,
+    init, open, close, isOpen, shop,
     get profile() { return profile; },
     look() { return profile ? profile.look : null; },
     onChange(f) { listeners.push(f); },

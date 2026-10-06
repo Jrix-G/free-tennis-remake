@@ -10,12 +10,12 @@ Remake fidèle **non officiel** de « TENNIS GAME » (GAMEDESIGN), le jeu de fre
 
 **Progression** (`web/progression.js`) : tout le monde commence à 3 en coup droit, revers, service et déplacement. Une partie rapide rapporte
 100 XP (victoire) ou 40 XP (défaite) ; chaque niveau donne un point de capacité (max 9), réattribuable à volonté. Elo de départ 1000, K = 32.
-Quitter une partie rapide en cours compte comme une défaite. Les invités restent à 3 et ne sont pas classés.
+Une victoire classée terminée rapporte aussi 100 pièces ; les défaites, abandons et parties annulées ne rapportent pas de pièces. Quitter avant tout déplacement ou frappe annule la partie sans modifier l'Elo/XP des deux joueurs ; après une action effective, quitter compte comme une défaite. Les invités restent à 3 et ne sont pas classés.
 
-**Compte** (bouton en haut à droite de l'accueil) : connexion avec Google, niveau, Elo, capacités, pseudo unique, couleur de tenue et de cheveux.
-Sans compte, on joue en invité. Les tenues viennent de `web/cosmetics.js`, catalogue partagé client/serveur prévu pour accueillir de futurs cosmétiques.
+**Compte et boutique** (bouton en haut à droite de l'accueil pour le compte, bouton Boutique sur l'écran titre) : connexion avec Google, niveau, Elo, capacités, pseudo unique, tenue et pièces. La boutique au style casino chic propose des raquettes, hauts, shorts et casquettes achetés directement avec les pièces (aucun paiement réel ni tirage aléatoire). Les pièces et articles sont sauvegardés sur le compte ; les invités ne peuvent pas acheter/équiper les articles payants.
 
 **Contrôles** : flèches pour se déplacer, et au moment de la frappe pour viser. Espace pour frapper / servir / valider.
+Shift sprint (+40 %, stamina), Z lift, X slice et C lob (adversaire au filet) ou amorti. Depuis l'accueil, K permet de modifier ces quatre touches.
 M coupe le son, Échap revient au menu. Souris : menus, barres de stats, choix de la joueuse.
 
 **Réseau** : le serveur (`server/server.js`, Node sans dépendance) fait tourner chaque match de façon autoritaire à 30 Hz.

@@ -14,6 +14,7 @@ const crypto = require('crypto');
 const L = require('../web/game.js');
 const CO = require('../web/cosmetics.js');
 const PG = require('../web/progression.js');
+const Cards = require('../web/cards.js');
 const bots = require('./bots.js');
 const { verifyGoogleToken } = require('./auth.js');
 const { open: openDb, publicProfile } = require('./db.js');
@@ -133,13 +134,14 @@ class Room {
       matchMode: 0, seed: crypto.randomInt(2 ** 32 - 1) + 1,
     });
     this.prevOverSp = [true, true]; this.wasOver = false; this.recorded = false;
+    for (const s of this.slots) if (s) s.touched = false;
   }
   attach(ws, idx, token) {
     let s = this.slots[idx];
     if (!s) s = this.slots[idx] = { token: token || crypto.randomBytes(9).toString('base64url'), queue: [], last: {}, ack: 0 };
     if (s.ws && s.ws !== ws) { s.ws.room = null; s.ws.close(); }  // a newer tab takes the slot
     Object.assign(s, { ws, goneAt: 0, lastInput: Date.now(), queue: [], name: ws.name, look: ws.look, userId: ws.userId,
-      stats: ws.stats, elo: ws.elo, level: ws.level });
+      stats: ws.stats, elo: ws.elo, level: ws.level, coins: ws.coins, owned: ws.owned });
     ws.room = this; ws.idx = idx;
     ws.send({ t: 'room', code: this.code, me: idx, token: s.token, public: this.isPublic });
     if (this.slots[0] && this.slots[1] && !this.started) this.start();
@@ -170,11 +172,14 @@ class Room {
     if (!this.started) return this.close();
     this.notify();
   }
-  leave(ws) {  // explicit quit: the opponent is told and the room ends; quitting a ranked match loses it
-    if (this.started && !this.G.over) this.record(1 - ws.idx);
+  leave(ws) {  // unplayed quick matches cancel; otherwise a ranked quit is a forfeit
+    const h = this.slots[ws.idx];
+    const liveQuick = this.started && !this.G.over && this.isPublic;
+    const cancelled = liveQuick && h && !h.touched;
+    if (liveQuick && h && h.touched) this.record(1 - ws.idx, false);
     const o = this.slots[1 - ws.idx];
     ws.room = null;
-    if (o && o.ws) { o.ws.send({ t: 'closed' }); o.ws.room = null; }
+    if (o && o.ws) { o.ws.send({ t: 'closed', reason: cancelled ? 'cancelled' : null }); o.ws.room = null; }
     this.close();
   }
   close() {
@@ -185,7 +190,8 @@ class Room {
   input(ws, m) {
     const s = this.slots[ws.idx];
     if (!s || s.ws !== ws || typeof m.s !== 'number' || !m.k) return;
-    const k = { l: !!m.k.l, r: !!m.k.r, u: !!m.k.u, d: !!m.k.d, sp: !!m.k.sp };
+    const k = { l: !!m.k.l, r: !!m.k.r, u: !!m.k.u, d: !!m.k.d, sp: !!m.k.sp,
+      sh: !!m.k.sh, tp: !!m.k.tp, sl: !!m.k.sl, lc: !!m.k.lc, a: !!m.k.a, n: !!m.k.n, p: !!m.k.p };
     s.queue.push({ s: m.s, k });
     s.lastInput = Date.now();
     while (s.queue.length > MAX_QUEUE) {  // too far behind: drop the oldest, keep its Space press
@@ -205,8 +211,9 @@ class Room {
     }
     const gone = this.slots.findIndex((s) => s && !s.bot && !s.ws && now - s.goneAt > RECONNECT_MS);
     if (gone >= 0) {
-      if (!this.G.over) this.record(1 - gone);  // never came back: forfeit
-      for (const s of this.slots) if (s && s.ws) s.ws.send({ t: 'closed' });
+      const cancelled = !this.G.over && this.isPublic && !this.slots[gone].touched;
+      if (!this.G.over && this.isPublic && this.slots[gone].touched) this.record(1 - gone, false);  // an active player who never returns forfeits
+      for (const s of this.slots) if (s && s.ws) s.ws.send({ t: 'closed', reason: cancelled ? 'cancelled' : null });
       return this.close();
     }
     const G = this.G;
@@ -222,10 +229,13 @@ class Room {
         if (s.deep > DEEP_TICKS) {  // drop this input, keep its Space press
           s.deep = 0;
           const next = s.queue.shift();
-          if (q.k.sp) next.k.sp = true;
+          if (q && q.k.sp) next.k.sp = true;
           q = next;
         }
-        if (q) { s.ack = q.s; s.last = q.k; return q.k; }
+        if (q) {
+          s.ack = q.s; s.last = q.k;
+          return q.k;
+        }
         return Object.assign({}, s.last, { sp: false });  // late input: hold the direction
       });
       if (G.over) {  // rematch when either player presses Space
@@ -233,30 +243,46 @@ class Room {
         if ((sp[0] && !this.prevOverSp[0]) || (sp[1] && !this.prevOverSp[1])) this.newMatch();
         else this.prevOverSp = sp;
       } else this.prevOverSp = [true, true];
-      L.step(this.G, pads);
+      const active = this.G;  // a Space press may have created a rematch immediately above
+      const before = active.P.map((p) => [p.vx, p.vy]);
+      const rally = active.rally_cnt;
+      L.step(active, pads);
+      if (this.isPublic) {
+        this.slots.forEach((s, i) => {
+          const p = active.P[i], moved = p.vx !== before[i][0] || p.vy !== before[i][1];
+          if (s && !s.bot && moved && (pads[i].l || pads[i].r || pads[i].u || pads[i].d)) s.touched = true;
+        });
+        if (active.rally_cnt > rally) {
+          const hitter = this.slots[active.B.side];
+          if (hitter && !hitter.bot) hitter.touched = true;
+        }
+      }
       ev = this.G.events;
       if (this.G.over && !this.wasOver) this.record(this.G.match_winner);
       this.wasOver = this.G.over;
     }
-    const g = JSON.stringify(this.G);
+    // Deck is match-constant and sent by the client default/catalogue; never spend snapshot bytes on it.
+    const g = JSON.stringify(this.G, (key, value) => key === 'deck' ? undefined : value);
     for (let i = 0; i < 2; i++) {
       const s = this.slots[i];
       if (s && s.ws) s.ws.send('{"t":"snap","paused":' + paused + ',"ack":' + s.ack + ',"q":' + s.queue.length + ',"ev":' + JSON.stringify(ev) + ',"g":' + g + '}');
     }
   }
-  // Ranked (quick match) result for logged-in players: W/L, XP, Elo. Guests count as 1000.
-  record(winner) {
+  // Ranked result for logged-in players: W/L, XP, Elo. Only completed wins grant coins; guests count as 1000.
+  record(winner, completed) {
     if (!this.isPublic || this.recorded) return;
     this.recorded = true;
     const ratings = this.slots.map((s) => (s.elo == null ? PG.START_ELO : s.elo));
     const next = PG.elo(ratings[0], ratings[1], winner === 0 ? 1 : 0);
     this.slots.forEach((s, i) => {
       if (s.bot || !s.userId) return;
-      db.recordResult(s.userId, winner === i, next[i]);
+      const coins = completed !== false && winner === i ? CO.COINS_WIN : 0;
+      db.recordResult(s.userId, winner === i, next[i], coins);
       const u = db.user(s.userId);
-      s.elo = u.elo; s.level = PG.level(u.xp).level;
+      Object.assign(s, { elo: u.elo, level: PG.level(u.xp).level, coins: u.coins, owned: CO.inventory(JSON.parse(u.owned || '{}')) });
       if (s.ws) {
-        s.ws.send({ t: 'result', won: winner === i, elo: next[i] - ratings[i], xp: winner === i ? PG.XP_WIN : PG.XP_LOSS });
+        Object.assign(s.ws, { elo: s.elo, level: s.level, coins: s.coins, owned: s.owned });
+        s.ws.send({ t: 'result', won: winner === i, elo: next[i] - ratings[i], xp: winner === i ? PG.XP_WIN : PG.XP_LOSS, coins });
         s.ws.send({ t: 'profile', profile: profileOf(u) });
       }
     });
@@ -322,11 +348,21 @@ function identify(ws, user) {
   ws.stats = user ? JSON.parse(user.stats) : PG.START_STATS.slice();  // guests keep the starting abilities
   ws.elo = user ? user.elo : null;
   ws.level = user ? PG.level(user.xp).level : null;
+  ws.coins = user ? user.coins : 0;
+  ws.owned = CO.inventory(user ? JSON.parse(user.owned || '{}') : {});
 }
 const profileOf = (u) => Object.assign(publicProfile(u), { rank: db.rank(u) });
 function refreshUser(id) {  // profile edited or logged in elsewhere: update open sockets
   const u = db.user(id);
-  for (const ws of clients) if (ws.userId === id) { identify(ws, u); ws.send({ t: 'profile', profile: profileOf(u) }); }
+  for (const ws of clients) if (ws.userId === id) {
+    identify(ws, u);
+    if (ws.room && ws.room.slots[ws.idx] && ws.room.slots[ws.idx].ws === ws) {
+      const s = ws.room.slots[ws.idx];
+      Object.assign(s, { name: ws.name, look: ws.look, stats: ws.stats, elo: ws.elo, level: ws.level, coins: ws.coins, owned: ws.owned });
+      ws.room.notify();
+    }
+    ws.send({ t: 'profile', profile: profileOf(u) });
+  }
 }
 
 // ---------- HTTP ----------
@@ -385,6 +421,13 @@ async function api(req, res, pathname) {
   if (pathname === '/api/stats') {
     if (!user) return json(res, 401, { error: 'Non connecté' });
     const err = db.setStats(user.id, body.stats);
+    if (err) return json(res, 400, { error: err });
+    refreshUser(user.id);
+    return json(res, 200, { profile: profileOf(db.user(user.id)) });
+  }
+  if (pathname === '/api/shop') {
+    if (!user) return json(res, 401, { error: 'Non connecté' });
+    const err = db.shop(user.id, body.action, body.kind, body.id);
     if (err) return json(res, 400, { error: err });
     refreshUser(user.id);
     return json(res, 200, { profile: profileOf(db.user(user.id)) });

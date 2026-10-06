@@ -8,9 +8,9 @@
 // the server guess our input, so the client runs a few % slower or faster to keep about one queued.
 // DOM-free so the automated test can drive it from Node.
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory(require('./game.js'));
-  else root.TennisNet = factory(root.TennisLogic);
-})(typeof self !== 'undefined' ? self : this, function (L) {
+  if (typeof module === 'object' && module.exports) module.exports = factory(require('./game.js'), require('./cards.js'));
+  else root.TennisNet = factory(root.TennisLogic, root.TennisCards);
+})(typeof self !== 'undefined' ? self : this, function (L, Cards) {
   'use strict';
 
   const TICK_MS = 1000 / 30;
@@ -31,7 +31,7 @@
   class OnlineSession {
     constructor(ws) {
       this.ws = ws; this.me = -1; this.code = null; this.token = null; this.isPublic = false;
-      this.peerOn = false; this.started = false; this.closed = false; this.online = 0; this.err = null;
+      this.peerOn = false; this.started = false; this.closed = false; this.cancelled = false; this.online = 0; this.err = null;
       this.seq = 0; this.pending = []; this.server = null; this.ack = 0; this.paused = true;
       this.lastSnap = 0; this.lastPing = 0; this.rtt = null; this.view = null; this.onEvents = null;
       this.shown = null; this.off = null; this.qAvg = Q_TARGET;  // view + blended correction; server queue depth
@@ -48,7 +48,7 @@
     create() { this.send({ t: 'create' }); }
     join(code, token) { this.err = null; this.send({ t: 'join', code, token }); }
     leave() { this.send({ t: 'leave' }); this.reset(); }
-    reset() { this.result = null; this.players = [null, null]; this.me = -1; this.code = null; this.started = false; this.peerOn = false; this.server = null; this.view = null; this.shown = null; this.off = null; this.pending = []; this.closed = false; }
+    reset() { this.result = null; this.players = [null, null]; this.me = -1; this.code = null; this.started = false; this.peerOn = false; this.server = null; this.view = null; this.shown = null; this.off = null; this.pending = []; this.closed = false; this.cancelled = false; }
     onMsg(m) {
       if (m.t === 'hello') { this.online = m.online; this.send({ t: 'ping', c: now() }); }  // keepalive answer
       else if (m.t === 'pong') this.rtt = now() - m.c;
@@ -59,10 +59,10 @@
       } else if (m.t === 'peer') { this.peerOn = m.on; this.started = m.started; if (m.players) this.players = m.players; }
       else if (m.t === 'profile') { if (this.onProfile) this.onProfile(m.profile); }
       else if (m.t === 'result') this.result = m;  // ranked outcome: { won, elo (delta), xp }
-      else if (m.t === 'closed') { this.closed = true; this.peerOn = false; }
+      else if (m.t === 'closed') { this.closed = true; this.cancelled = m.reason === 'cancelled'; this.peerOn = false; }
       else if (m.t === 'snap') {
         this.lastSnap = now(); this.paused = m.paused; this.started = true;
-        this.server = m.g; this.ack = m.ack;
+        m.g.deck = Cards.STARTER_DECK; this.server = m.g; this.ack = m.ack;
         if (!m.paused && typeof m.q === 'number') this.qAvg += (m.q - this.qAvg) * 0.05;
         this.pending = this.pending.filter((p) => p.s > m.ack);
         this.sound(m.ev, m.g.tick);
@@ -78,7 +78,8 @@
     // Called at 30 Hz once the match runs: send this tick's input, then rebuild the prediction.
     tick(localPad) {
       if (this.me < 0) return;
-      const k = { l: !!localPad.l, r: !!localPad.r, u: !!localPad.u, d: !!localPad.d, sp: !!localPad.sp };
+      const k = { l: !!localPad.l, r: !!localPad.r, u: !!localPad.u, d: !!localPad.d, sp: !!localPad.sp,
+        sh: !!localPad.sh, tp: !!localPad.tp, sl: !!localPad.sl, lc: !!localPad.lc, a: !!localPad.a, n: !!localPad.n, p: !!localPad.p };
       if (this.server && !this.paused && !this.lost) {
         this.seq++;
         this.pending.push({ s: this.seq, k });

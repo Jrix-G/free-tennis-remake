@@ -49,11 +49,12 @@
     app2() { applause(3.5); },
     space() { const t = ac.currentTime; tone(1320, t, 0.12, 'square', 0.12); tone(1760, t + 0.07, 0.18, 'square', 0.12); },
     click() { tone(880, ac.currentTime, 0.06, 'square', 0.1); },
+    out() { const t = ac.currentTime; tone(150, t, 0.12, 'square', 0.12, null, 90); },
   };
 
   // Music: [melody notes (semitones from A4, null = rest)], step seconds.
   const SONGS = {
-    title: { step: 0.16, mel: [0, 4, 7, 12, 7, 4, 0, null, 2, 5, 9, 14, 9, 5, 2, null, 4, 7, 11, 16, 11, 7, 4, null, 5, 9, 12, 17, 12, 9, 7, null], bass: [-24, -24, -19, -19, -22, -22, -17, -17] },
+    title: { step: 0.13, mel: [0, 7, 12, 7, 4, 7, 14, 12, 2, 9, 14, 9, 5, 9, 16, 14, 4, 11, 16, 11, 7, 11, 19, 16, 5, 12, 17, 12, 9, 12, 19, 17], bass: [-24, -24, -17, -17, -22, -22, -15, -15], wave: 'triangle', lead: 'square' },
     start: { step: 0.13, mel: [12, null, 12, 14, 16, null, 12, null, 17, 16, 14, 12, 14, null, 7, null], bass: [-12, -5, -10, -5] },
   };
 
@@ -69,8 +70,11 @@
     const timer = setInterval(() => {
       while (next < ac.currentTime + 0.3) {
         const n = song.mel[i % song.mel.length];
-        if (n !== null) tone(hz(n), next, song.step * 0.9, 'square', 0.25, bus);
-        if (i % 4 === 0) tone(hz(song.bass[(i / 4) % song.bass.length]), next, song.step * 3.5, 'triangle', 0.5, bus);
+        if (n !== null) {
+          tone(hz(n), next, song.step * 0.82, song.lead || 'square', 0.22, bus);
+          if (name === 'title' && i % 2 === 0) tone(hz(n + 7), next, song.step * 1.5, 'sine', 0.09, bus);
+        }
+        if (i % 4 === 0) tone(hz(song.bass[(i / 4) % song.bass.length]), next, song.step * 3.5, 'triangle', 0.42, bus);
         next += song.step; i++;
       }
     }, 60);

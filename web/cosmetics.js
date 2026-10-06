@@ -1,6 +1,4 @@
 // Cosmetics catalog, shared by the renderer and the server (which validates what a profile picks).
-// A look is { cloth, hair } of item ids. Every item is free for now; later items can carry a price
-// or an unlock condition and the server will check ownership before accepting them.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.TennisCosmetics = factory();
@@ -28,19 +26,69 @@
       { id: 'platinum', name: 'Platine', color: '#e6dcb8' },
       { id: 'blue', name: 'Bleu', color: '#3a6fd8' },
     ],
+    racket: [
+      { id: 'classic', name: 'Classique', color: '#5a66dc', shade: '#232867', grip: '#141414', price: 0 },
+      { id: 'crimson', name: 'Crimson', color: '#f04452', shade: '#8a1829', grip: '#421020', price: 100 },
+      { id: 'emerald', name: 'Émeraude', color: '#42e0a0', shade: '#116447', grip: '#123b32', price: 140 },
+      { id: 'gold', name: 'Or 24K', color: '#ffd23a', shade: '#a45d19', grip: '#643b18', price: 220 },
+      { id: 'neon', name: 'Néon', color: '#d4ff3a', shade: '#5d861a', grip: '#344512', price: 180 },
+    ],
+    cap: [
+      { id: 'none', name: 'Sans casquette', color: null, shade: null, price: 0 },
+      { id: 'ruby', name: 'Visière rubis', color: '#e8423a', shade: '#a82a25', price: 70 },
+      { id: 'ocean', name: 'Visière océan', color: '#3a7be8', shade: '#2552a8', price: 90 },
+      { id: 'jade', name: 'Casquette jade', color: '#2fae5a', shade: '#1f7a3e', price: 120 },
+      { id: 'gold', name: 'Visière VIP', color: '#ffd23a', shade: '#a45d19', price: 180 },
+    ],
   };
-  const DEFAULT = [{ cloth: 'white', hair: 'brown' }, { cloth: 'white', hair: 'blond' }];  // original look per side
+  for (const kind of ['shirt', 'shorts']) {
+    CATALOG[kind] = CATALOG.cloth.map((item) => ({
+      id: item.id, name: item.name, color: item.color, shade: item.shade, price: 0,
+    }));
+  }
+  CATALOG.shirt.push({ id: 'starlight', name: 'Starlight', color: '#b9a0ff', shade: '#59448a', price: 180 },
+    { id: 'neon-pink', name: 'Néon rose', color: '#ff52c8', shade: '#a32978', price: 200 });
+  CATALOG.shorts.push({ id: 'starlight', name: 'Starlight', color: '#b9a0ff', shade: '#59448a', price: 160 },
+    { id: 'neon-pink', name: 'Néon rose', color: '#ff52c8', shade: '#a32978', price: 180 });
+  // Economy metadata is explicit on every cosmetic so later shops never infer a price client-side.
+  for (const kind of Object.keys(CATALOG)) for (const item of CATALOG[kind]) {
+    item.price = item.price || 0;
+    item.currency = 'coins';
+    item.rarity = item.price >= 180 ? 'epic' : item.price >= 100 ? 'rare' : 'common';
+    item.unlock = item.price ? 'shop' : 'starter';
+  }
+  const DEFAULT = [{ cloth: 'white', hair: 'brown', racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none' },
+    { cloth: 'white', hair: 'blond', racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none' }];
+  const STARTER_OWNED = { racket: ['classic'], shirt: ['white'], shorts: ['white'], cap: ['none'] };
+  const SHOP_KINDS = ['racket', 'shirt', 'shorts', 'cap'];
+  const COINS_WIN = 100;
 
-  const find = (kind, id) => CATALOG[kind].find((it) => it.id === id) || null;
-  // Keep only known items; fall back to the side's original look.
+  const find = (kind, id) => CATALOG[kind] && CATALOG[kind].find((it) => it.id === id) || null;
   function sanitize(look, side) {
     const d = DEFAULT[side || 0], l = look || {};
-    return { cloth: find('cloth', l.cloth) ? l.cloth : d.cloth, hair: find('hair', l.hair) ? l.hair : d.hair };
+    const cloth = find('cloth', l.cloth) ? l.cloth : d.cloth;
+    return {
+      cloth, hair: find('hair', l.hair) ? l.hair : d.hair,
+      racket: find('racket', l.racket) ? l.racket : d.racket,
+      shirt: find('shirt', l.shirt) ? l.shirt : find('shirt', cloth) ? cloth : d.shirt,
+      shorts: find('shorts', l.shorts) ? l.shorts : find('shorts', cloth) ? cloth : d.shorts,
+      cap: find('cap', l.cap) ? l.cap : d.cap,
+    };
+  }
+  function inventory(owned) {
+    const out = {};
+    for (const kind of SHOP_KINDS) out[kind] = Array.from(new Set([...(STARTER_OWNED[kind] || []), ...((owned && owned[kind]) || [])]));
+    return out;
+  }
+  function owns(owned, kind, id) {
+    if (kind === 'cloth' || kind === 'hair') return !!find(kind, id);
+    const item = find(kind, id);
+    return !!item && (item.price === 0 || inventory(owned)[kind]?.includes(id));
   }
   function random(rnd) {
     const pick = (a) => a[Math.floor((rnd || Math.random)() * a.length)].id;
-    return { cloth: pick(CATALOG.cloth), hair: pick(CATALOG.hair) };
+    return { cloth: pick(CATALOG.cloth), hair: pick(CATALOG.hair), racket: 'classic', shirt: 'white', shorts: 'white', cap: 'none' };
   }
 
-  return { CATALOG, DEFAULT, find, sanitize, random };
+  return { CATALOG, DEFAULT, STARTER_OWNED, SHOP_KINDS, COINS_WIN, find, sanitize, inventory, owns, random };
 });

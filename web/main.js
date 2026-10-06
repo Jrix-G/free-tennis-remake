@@ -1,7 +1,7 @@
 // Screens, input, fixed 30 Hz loop, solo + network flows.
 (function () {
   'use strict';
-  const L = TennisLogic, R = TennisRender, A = TennisAudio, N = TennisNet, AC = TennisAccount, PG = TennisProgression, C = L.C;
+  const L = TennisLogic, R = TennisRender, A = TennisAudio, N = TennisNet, AC = TennisAccount, PG = TennisProgression, CO = TennisCosmetics, C = L.C;
   const TICK = 1000 / 30;
   const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
   const stage = document.getElementById('stage'), addr = document.getElementById('addr');
@@ -24,7 +24,23 @@
   addEventListener('resize', resize);
 
   // ---------- input ----------
-  const KEYS = { ArrowLeft: 'l', ArrowRight: 'r', ArrowUp: 'u', ArrowDown: 'd', ' ': 'sp', Spacebar: 'sp' };
+  const KEY_STORAGE = 'tennus.advanced-keys';
+  const defaultAdvanced = { sh: 'Shift', tp: 'z', sl: 'x', lc: 'c' };
+  let advanced;
+  try { advanced = Object.assign({}, defaultAdvanced, JSON.parse(localStorage.getItem(KEY_STORAGE) || '{}')); } catch (e) { advanced = Object.assign({}, defaultAdvanced); }
+  function keyMap() {
+    const out = { ArrowLeft: 'l', ArrowRight: 'r', ArrowUp: 'u', ArrowDown: 'd', ' ': 'sp', Spacebar: 'sp', a: 'a', A: 'a', q: 'p', Q: 'p', e: 'n', E: 'n' };
+    for (const [action, key] of Object.entries(advanced)) { out[key] = action; out[key.toUpperCase()] = action; }
+    return out;
+  }
+  let KEYS = keyMap();
+  function configureKeys() {
+    const raw = prompt('Touches avancées : Sprint, Lift, Slice, Lob/Amorti', [advanced.sh, advanced.tp, advanced.sl, advanced.lc].join(', '));
+    if (raw == null) return;
+    const v = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    if (v.length !== 4 || new Set(v.map((s) => s.toLowerCase())).size !== 4) return alert('Entrez quatre touches différentes, séparées par des virgules.');
+    advanced = { sh: v[0], tp: v[1], sl: v[2], lc: v[3] }; KEYS = keyMap(); localStorage.setItem(KEY_STORAGE, JSON.stringify(advanced));
+  }
   const keys = {}; let spLatch = false;
   addEventListener('keydown', (e) => {
     A.unlock();
@@ -38,7 +54,8 @@
   addEventListener('keyup', (e) => { const k = KEYS[e.key]; if (k) keys[k] = false; });
   addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
   function readPad() {  // sampled once per tick, like the original keydata[]
-    const p = { l: !!keys.l, r: !!keys.r, u: !!keys.u, d: !!keys.d, sp: !!keys.sp || spLatch };
+    const p = { l: !!keys.l, r: !!keys.r, u: !!keys.u, d: !!keys.d, sp: !!keys.sp || spLatch,
+      sh: !!keys.sh, tp: !!keys.tp, sl: !!keys.sl, lc: !!keys.lc, a: !!keys.a, n: !!keys.n, p: !!keys.p };
     spLatch = false;
     return p;
   }
@@ -78,9 +95,10 @@
   }
 
   // ---------- title ----------
-  const MENU = [['PARTIE RAPIDE', 'Classé · Elo et XP', 300], ['TOURNOI', '16 joueurs, élimination directe', 362],
+  const MENU = [['PARTIE RAPIDE', 'Classé · Elo, XP et pièces', 300], ['TOURNOI', '16 joueurs, élimination directe', 362],
     ['HÉBERGER / REJOINDRE', 'Joue avec un ami via un code', 424], ['CLASSEMENT', 'Les meilleurs joueurs', 486]];
   const MENU_X = 140, MENU_W = 320, MENU_H = 52;
+  const SHOP_ENTRY = [18, 18, 120, 36];
   const menuRect = (y) => [MENU_X, y, MENU_W, MENU_H];
   const Title = {
     enter() {
@@ -92,15 +110,19 @@
     draw() {
       R.drawTitleScene(ctx, performance.now() / 1000);
       R.drawLogo(ctx, 'TENNUS', 300, 150);
-      R.text(ctx, 'Espace : frapper   ·   Flèches : bouger et viser   ·   3 jeux pour gagner', 300, 196, 12,
+      ctx.fillStyle = 'rgba(255,210,58,0.16)'; R.roundRect(ctx, SHOP_ENTRY[0], SHOP_ENTRY[1], SHOP_ENTRY[2], SHOP_ENTRY[3], 12); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,210,58,0.65)'; ctx.stroke();
+      R.text(ctx, '✦ BOUTIQUE', 78, 42, 14, { align: 'center', outline: false, color: '#ffd23a' });
+      R.text(ctx, 'Espace : frapper · Flèches : bouger et viser · K : configurer les touches', 300, 196, 12,
         { align: 'center', outline: false, weight: 'normal', color: 'rgba(220,235,255,0.75)' });
       MENU.forEach(([s, sub, y], i) => R.menuCard(ctx, menuRect(y), s, sub, inRect(mx, my, menuRect(y)), i === 0));
       const p = AC.profile;
-      R.text(ctx, p ? 'Niv. ' + p.level + '   ·   Elo ' + p.elo + (p.points ? '   ·   ' + p.points + ' point(s) à placer !' : '')
+      R.text(ctx, p ? 'Niv. ' + p.level + '   ·   Elo ' + p.elo + '   ·   ' + p.coins + ' pièces' + (p.points ? '   ·   ' + p.points + ' point(s) à placer !' : '')
         : 'Invité : connectez-vous pour progresser', 300, 566, 13,
         { align: 'center', outline: false, color: p && p.points ? '#d4ff3a' : 'rgba(220,235,255,0.8)' });
     },
     onClick(x, y) {
+      if (inRect(x, y, SHOP_ENTRY)) { go(Shop()); return; }
       const i = MENU.findIndex(([, , my2]) => inRect(x, y, menuRect(my2)));
       if (i < 0) return;
       A.play('click'); A.stopMusic();
@@ -109,6 +131,7 @@
       else if (i === 2) go(Lobby({}));
       else go(Leaderboard());
     },
+    onKey(k) { if (k === 'k' || k === 'K') configureKeys(); },
   };
 
   // ---------- tournament: you (your unlocked abilities) against 15 players of the original roster ----------
@@ -119,6 +142,76 @@
     for (let i = roster.length - 1; i > 0; i--) { const r = Math.floor(Math.random() * (i + 1)); [roster[i], roster[r]] = [roster[r], roster[i]]; }
     Object.assign(data, { tdat: [me].concat(roster.slice(0, 15)), kaisen: 0, match_mode: 1, result_txt: [] });
     go(Bracket());
+  }
+
+  // ---------- cosmetic shop ----------
+  function Shop() {
+    const kinds = CO.SHOP_KINDS;
+    let kind = 'racket', status = '', busy = false;
+    const BTN_BACK = [230, 548, 140, 32];
+    const tabs = kinds.map((k, i) => [k, [24 + i * 138, 92, 132, 30]]);
+    const title = { racket: 'RAQUETTES', shirt: 'HAUTS', shorts: 'SHORTS', cap: 'CASQUETTES' };
+    async function act(item, action) {
+      if (!AC.profile) { status = 'Connectez-vous pour acheter et équiper.'; AC.open(); return; }
+      if (busy) return;
+      busy = true; status = action === 'buy' ? 'Achat en cours...' : 'Équipement en cours...';
+      try { await AC.shop(action, kind, item.id); status = action === 'buy' ? 'Article acheté !' : 'Article équipé !'; }
+      catch (e) { status = e.message; }
+      busy = false;
+    }
+    return {
+      tick() {},
+      draw() {
+        R.drawScene(ctx); R.panel(ctx);
+        const glow = ctx.createRadialGradient(300, 80, 20, 300, 260, 360);
+        glow.addColorStop(0, 'rgba(255,190,55,0.12)'); glow.addColorStop(1, 'rgba(255,190,55,0)');
+        ctx.fillStyle = glow; ctx.fillRect(20, 20, 560, 540);
+        R.text(ctx, '✦  BOUTIQUE VIP  ✦', 300, 62, 30, { align: 'center', outline: false, color: '#ffd23a' });
+        const p = AC.profile;
+        R.text(ctx, p ? 'Solde : ' + p.coins + ' pièces  ·  +100 à chaque victoire classée' : 'Connectez-vous pour dépenser vos pièces de victoire',
+          300, 82, 12, { align: 'center', outline: false, color: '#e5d6ad' });
+        for (const [k, r] of tabs) {
+          const hot = k === kind || inRect(mx, my, r);
+          ctx.fillStyle = k === kind ? 'rgba(255,210,58,0.95)' : hot ? 'rgba(255,210,58,0.3)' : 'rgba(255,255,255,0.1)';
+          R.roundRect(ctx, r[0], r[1], r[2], r[3], 8); ctx.fill();
+          R.text(ctx, title[k], r[0] + r[2] / 2, r[1] + 20, 13, { align: 'center', outline: false, color: k === kind ? '#19130a' : '#fff' });
+        }
+        const items = CO.CATALOG[kind];
+        items.forEach((item, i) => {
+          const col = i % 2, row = Math.floor(i / 2), x = 32 + col * 270, y = 132 + row * 65;
+          ctx.fillStyle = 'rgba(7,13,30,0.78)'; R.roundRect(ctx, x, y, 256, 57, 9); ctx.fill();
+          ctx.strokeStyle = item.id === 'gold' ? 'rgba(255,210,58,0.7)' : 'rgba(255,255,255,0.16)'; ctx.stroke();
+          if (item.color) { ctx.fillStyle = item.color; R.roundRect(ctx, x + 9, y + 13, 30, 30, 7); ctx.fill(); }
+          R.text(ctx, item.name, x + 48, y + 23, 13, { outline: false });
+          const have = !!(p && CO.owns(p.owned, kind, item.id));
+          const current = p && p.look[kind] === item.id;
+          const label = current ? 'ÉQUIPÉ' : have ? 'ÉQUIPER' : item.price + ' ✦';
+          const br = [x + 154, y + 31, 92, 20];
+          ctx.fillStyle = current ? '#5cbd87' : inRect(mx, my, br) ? '#ffd23a' : '#e7bc45';
+          R.roundRect(ctx, br[0], br[1], br[2], br[3], 6); ctx.fill();
+          R.text(ctx, label, br[0] + br[2] / 2, br[1] + 14, 11, { align: 'center', outline: false, color: '#19130a' });
+          if (!have && item.price === 0) R.text(ctx, 'Inclus', x + 50, y + 43, 10, { outline: false, color: '#9ad0ff' });
+        });
+        R.text(ctx, status, 300, 535, 13, { align: 'center', outline: false, color: '#9ad0ff' });
+        const hot = inRect(mx, my, BTN_BACK); ctx.fillStyle = hot ? '#ffd23a' : '#f2f2f2';
+        R.roundRect(ctx, BTN_BACK[0], BTN_BACK[1], BTN_BACK[2], BTN_BACK[3], 8); ctx.fill();
+        R.text(ctx, 'RETOUR', 300, 570, 16, { align: 'center', outline: false, color: '#222' });
+      },
+      onClick(x, y) {
+        if (inRect(x, y, BTN_BACK)) { go(Title); return; }
+        for (const [k, r] of tabs) if (inRect(x, y, r)) { kind = k; status = ''; return; }
+        const p = AC.profile, items = CO.CATALOG[kind];
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i], col = i % 2, row = Math.floor(i / 2), x0 = 32 + col * 270, y0 = 132 + row * 65;
+          if (!inRect(x, y, [x0 + 154, y0 + 31, 92, 20])) continue;
+          if (p && p.look[kind] === item.id) return;
+          const have = !!(p && CO.owns(p.owned, kind, item.id));
+          if (!have && item.price === 0) { status = 'Article déjà inclus.'; return; }
+          act(item, have ? 'equip' : 'buy'); return;
+        }
+      },
+      onKey(k) { if (k === 'Escape') go(Title); },
+    };
   }
 
   // ---------- ranking ----------
@@ -242,9 +335,11 @@
   }
 
   // ---------- match drawing shared by solo and network ----------
-  function drawMatch(g, flip, prev, alpha, meIdx, looks) {
-    R.drawGame(ctx, g, flip, prev, alpha, looks);
+  function drawMatch(g, flip, prev, alpha, meIdx, looks, outTicks) {
+    R.drawGame(ctx, g, flip, prev, alpha, looks, outTicks);
     R.text(ctx, g.score_txt, 8, 590, 18);
+    const me = g.P[meIdx], card = TennisCards.CARDS.find((c) => c.id === g.deck[me.card]);
+    R.text(ctx, 'ÉNERGIE ' + me.en + '/10  ·  A ' + (card ? card.name : ''), 300, 584, 11, { align: 'center', outline: false, color: '#9ad0ff' });
     // quit button
     ctx.fillStyle = 'rgba(255,255,255,0.85)'; R.roundRect(ctx, 576, 6, 19, 19, 3); ctx.fill();
     ctx.fillStyle = '#5a6a3f'; ctx.beginPath(); ctx.moveTo(581, 15.5); ctx.lineTo(590, 10); ctx.lineTo(590, 21); ctx.fill();
@@ -277,15 +372,16 @@
       names: data.pname, data: data.player_data, ctrl: ['human', 'ai'], matchMode: data.match_mode,
       seed: (Math.random() * 2 ** 32) >>> 0,
     });
-    let prev = null;
+    let prev = null, outTicks = 0;
     go({
       tick() {
         prev = snapPos(G);
         L.step(G, [readPad(), null]);
-        for (const e of G.events) A.play(e);
+        for (const e of G.events) { A.play(e); if (e === 'out') outTicks = 30; }
+        if (outTicks) outTicks--;
         if (G.over) afterMatch(G);
       },
-      draw(alpha) { drawMatch(G, false, prev, alpha, 0, [AC.look(), null]); },
+      draw(alpha) { drawMatch(G, false, prev, alpha, 0, [AC.look(), null], outTicks); },
       onClick(x, y) { if (inRect(x, y, QUIT)) go(Title); },
       onKey(k) { if (k === 'Escape') go(Title); },
     });
@@ -417,10 +513,10 @@
 
   // ---------- online match ----------
   function startNet() {
-    let prev = null, intro = 75, wasOver = false, levelUp = 0;  // "VS" banner for the first 2.5 s
-    sess.onEvents = (ev) => ev.forEach((e) => A.play(e));
+    let prev = null, intro = 75, wasOver = false, levelUp = 0, outTicks = 0;  // "VS" banner for the first 2.5 s
+    sess.onEvents = (ev) => ev.forEach((e) => { A.play(e); if (e === 'out') outTicks = 30; });
     sess.onProfile = (p) => { const old = AC.profile; if (old && p.level > old.level) levelUp = p.level; AC.update(p); };
-    let confirmQuit = 0;  // a ranked match left before the end is lost: ask twice
+    let confirmQuit = 0;  // confirm ranked departure; server cancels if no movement or hit occurred
     const leave = () => {
       const g = sess.view;
       if (sess.isPublic && g && !g.over && !sess.closed && !confirmQuit) { confirmQuit = 90; return; }
@@ -435,12 +531,13 @@
         if (wasOver && !over) { sess.result = null; levelUp = 0; }  // rematch started
         wasOver = over;
         if (confirmQuit) confirmQuit--;
+        if (outTicks) outTicks--;
       },
       tickScale: () => sess.tickScale,
       draw(alpha) {
         const g = sess.shown;
         if (!g) return;
-        drawMatch(g, sess.me === 1, prev, alpha, sess.me, sess.players.map((p) => p && p.look));
+        drawMatch(g, sess.me === 1, prev, alpha, sess.me, sess.players.map((p) => p && p.look), outTicks);
         const opp = sess.players[1 - sess.me];
         if (intro > 0 && opp) {
           ctx.globalAlpha = Math.min(1, intro / 15);
@@ -453,7 +550,7 @@
         const rtt = sess.rtt;
         R.text(ctx, 'VOUS : P' + (sess.me + 1) + (rtt != null ? '  ping ' + Math.round(rtt) + ' ms' : ''), 8, 20, 14);
         let msg = null;
-        if (sess.closed) msg = "L'adversaire a quitté la partie" + (sess.result ? ' : victoire !' : '');
+        if (sess.closed) msg = sess.cancelled ? 'Partie annulée — aucun Elo, XP ni pièces.' : "L'adversaire a quitté la partie" + (sess.result ? ' : victoire !' : '');
         else if (sess.lost) msg = 'Connexion perdue - reconnexion...';
         else if (sess.paused) msg = sess.peerOn ? 'Pause - en attente...' : 'Adversaire déconnecté - pause';
         if (msg) {
@@ -463,13 +560,13 @@
         }
         if (confirmQuit) {
           ctx.fillStyle = 'rgba(160,0,0,0.75)'; ctx.fillRect(0, 350, 600, 60);
-          R.text(ctx, 'Quitter maintenant = défaite.', 300, 376, 22, { align: 'center' });
+          R.text(ctx, 'Sans mouvement ni frappe : annulée. Sinon : défaite.', 300, 376, 18, { align: 'center' });
           R.text(ctx, 'Échap à nouveau pour confirmer', 300, 400, 15, { align: 'center' });
         }
         if (g.over) {
           R.text(ctx, 'Espace : revanche   -   Échap : menu', 300, 380, 18, { align: 'center' });
           const r = sess.result;
-          if (r) R.text(ctx, (r.elo >= 0 ? '+' : '') + r.elo + ' Elo   ·   +' + r.xp + ' XP', 300, 420, 22, { align: 'center', color: r.elo >= 0 ? '#7dff8a' : '#ff8a80' });
+          if (r) R.text(ctx, (r.elo >= 0 ? '+' : '') + r.elo + ' Elo   ·   +' + r.xp + ' XP   ·   +' + (r.coins || 0) + ' pièces', 300, 420, 18, { align: 'center', color: r.elo >= 0 ? '#7dff8a' : '#ff8a80' });
           if (levelUp) R.text(ctx, 'NIVEAU ' + levelUp + ' ! Un point de capacité à placer (compte)', 300, 452, 16, { align: 'center', color: '#ffd23a' });
         }
       },

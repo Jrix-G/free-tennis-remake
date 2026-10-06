@@ -58,7 +58,7 @@
     return c;
   }
 
-  function drawNet(ctx) {
+  function drawNet(ctx, outAlpha) {
     const y0 = C.SCREEN_OY, top = y0 - C.NET_H, xl = 103, xr = 497;
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(xl, top + 3, xr - xl, C.NET_H - 3);
@@ -68,7 +68,7 @@
     ctx.fillStyle = '#fff'; ctx.fillRect(xl, top, xr - xl, 4);
     ctx.fillStyle = '#ccc'; ctx.fillRect(xl, top + 4, xr - xl, 1);
     for (const x of [xl - 3, xr - 1]) {
-      ctx.fillStyle = '#c6b706'; ctx.fillRect(x, top - 4, 4, C.NET_H + 4);
+      ctx.fillStyle = outAlpha ? 'rgba(255,35,30,' + outAlpha + ')' : '#c6b706'; ctx.fillRect(x, top - 4, 4, C.NET_H + 4);
       ctx.fillStyle = '#344501'; ctx.fillRect(x, top - 4, 1, C.NET_H + 4);
     }
   }
@@ -161,27 +161,29 @@
   }
   const lower = (a, b) => (a[1] > b[1] ? a : b);
 
-  function racket(g, hx, hy, angDeg, face, len) {
+  function racket(g, hx, hy, angDeg, face, len, style) {
+    style = style || {};
+    const frame = style.color || COL.frame, frameD = style.shade || COL.frameD, grip = style.grip || COL.grip;
     const a = angDeg * Math.PI / 180, ux = Math.cos(a), uy = Math.sin(a), vx = -uy, vy = ux;
     const L = len, A = 20 * L, B = 14.5 * Math.max(0.1, face);
     const sx = hx + ux * 15 * L, sy = hy + uy * 15 * L;          // end of the shaft
     const cx = hx + ux * (15 * L + A * 0.55 + 6 * L), cy = hy + uy * (15 * L + A * 0.55 + 6 * L);
     g.lineCap = 'round';
-    g.strokeStyle = COL.grip; g.lineWidth = 3.4;
+    g.strokeStyle = grip; g.lineWidth = 3.4;
     g.beginPath(); g.moveTo(hx - ux * 3, hy - uy * 3); g.lineTo(hx + ux * 8 * L, hy + uy * 8 * L); g.stroke();
     // throat (open V)
     const tx = cx - ux * A * 0.86, ty = cy - uy * A * 0.86;
     for (const sd of [1, -1]) {
-      g.strokeStyle = COL.frameD; g.lineWidth = 3;
+      g.strokeStyle = frameD; g.lineWidth = 3;
       g.beginPath(); g.moveTo(hx + ux * 8 * L, hy + uy * 8 * L); g.lineTo(sx, sy); g.lineTo(tx + vx * B * 0.5 * sd, ty + vy * B * 0.5 * sd); g.stroke();
-      g.strokeStyle = COL.frame; g.lineWidth = 1.6;
+      g.strokeStyle = frame; g.lineWidth = 1.6;
       g.beginPath(); g.moveTo(sx, sy); g.lineTo(tx + vx * B * 0.5 * sd, ty + vy * B * 0.5 * sd); g.stroke();
     }
     // hollow head: dark rim then lighter rim nudged to the upper left
     g.save(); g.translate(cx, cy); g.rotate(a);
-    g.strokeStyle = COL.frameD; g.lineWidth = 5.6;
+    g.strokeStyle = frameD; g.lineWidth = 5.6;
     g.beginPath(); g.ellipse(0, 0, A, B, 0, 0, Math.PI * 2); g.stroke();
-    g.strokeStyle = COL.frame; g.lineWidth = 3;
+    g.strokeStyle = frame; g.lineWidth = 3;
     g.beginPath(); g.ellipse(-0.6, -0.6, A - 0.6, Math.max(0.6, B - 0.6), 0, 0, Math.PI * 2); g.stroke();
     g.restore();
   }
@@ -190,7 +192,9 @@
   function drawPlayer(ctx, x, y, scale, anim, af, facing, hairIdx, look) {
     const p = pose(anim, af, facing), back = facing === 'back';
     const CO = root.TennisCosmetics, lk = CO.sanitize(look, hairIdx || 0);
-    const clothIt = CO.find('cloth', lk.cloth), cloth = clothIt.color, clothD = clothIt.shade;
+    const shirtIt = CO.find('shirt', lk.shirt), shortsIt = CO.find('shorts', lk.shorts);
+    const racketIt = CO.find('racket', lk.racket), capIt = CO.find('cap', lk.cap);
+    const cloth = shirtIt.color, clothD = shirtIt.shade, shorts = shortsIt.color, shortsD = shortsIt.shade;
     const g = ctx;
     g.save();
     g.translate(x, y); g.scale(1.2 * scale * (back ? 1 : -1), 1.2 * scale);
@@ -199,7 +203,7 @@
 
     const drawRacketArm = () => {
       const S = [sx + 8.5, sh + 2], H = p.hand, E = joint(S[0], S[1], H[0], H[1], 13, 13, lower);
-      racket(g, H[0], H[1], p.rack, p.face, p.len);
+      racket(g, H[0], H[1], p.rack, p.face, p.len, racketIt);
       if (p.hideArms) return;  // held in front of the chest, hidden by the body (back view)
       seg(g, S[0], S[1], E[0], E[1], 6, 5, COL.skin, COL.skinD);
       seg(g, E[0], E[1], H[0], H[1], 5, 4.2, COL.skin, COL.skinD);
@@ -227,12 +231,12 @@
 
     if (!p.over) drawRacketArm();
     if (back) drawOffArm();
-    // dress: bodice + flared skirt, shaded on the right and along the hem
+    // Separate shirt and shorts, with a shaded side panel.
     poly(g, [[sx - 8.5, sh], [sx + 8.5, sh], [hx + 6.5, waistY], [hx - 6.5, waistY]], cloth);
     poly(g, [[sx + 3, sh], [sx + 8.5, sh], [hx + 6.5, waistY], [hx + 2.5, waistY]], clothD);
-    poly(g, [[hx - 7.5, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 6], [hx - 11.5, hipY + 6]], cloth);
-    poly(g, [[hx + 3, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 6], [hx + 5.5, hipY + 6]], clothD);
-    poly(g, [[hx - 11, hipY + 4], [hx + 11, hipY + 4], [hx + 11.5, hipY + 6], [hx - 11.5, hipY + 6]], clothD);
+    poly(g, [[hx - 7.5, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 8], [hx - 11.5, hipY + 8]], shorts);
+    poly(g, [[hx + 3, waistY - 1], [hx + 7.5, waistY - 1], [hx + 11.5, hipY + 8], [hx + 5.5, hipY + 8]], shortsD);
+    poly(g, [[hx - 11, hipY + 6], [hx + 11, hipY + 6], [hx + 11.5, hipY + 8], [hx - 11.5, hipY + 8]], shortsD);
     if (!back) drawOffArm();
 
     // neck + head (octagon), hair; front view adds the white visor and dark glasses
@@ -251,6 +255,11 @@
       poly(g, [[hdx - 7.8, hdy - 4.2], [hdx + 7.8, hdy - 4.2], [hdx + 7.6, hdy - 1.6], [hdx - 7.6, hdy - 1.6]], COL.visor);
       poly(g, [[hdx - 6.5, hdy - 1.2], [hdx + 6.5, hdy - 1.2], [hdx + 5.5, hdy + 2], [hdx - 5.5, hdy + 2]], COL.lens);
     }
+    if (capIt && capIt.color) {
+      poly(g, [[hdx - 8, hdy - 4], [hdx - 6, hdy - 9], [hdx + 2, hdy - 10], [hdx + 8, hdy - 5], [hdx + 7, hdy - 2]], capIt.color);
+      poly(g, [[hdx - 8, hdy - 3], [hdx + 9, hdy - 3], [hdx + 11, hdy - 1], [hdx - 6, hdy - 1]], capIt.shade);
+      if (lk.cap === 'jade') poly(g, [[hdx + 2, hdy - 10], [hdx + 8, hdy - 5], [hdx + 7, hdy - 2], [hdx + 1, hdy - 5]], capIt.shade);
+    }
     if (p.over) drawRacketArm();
     g.restore();
   }
@@ -262,7 +271,7 @@
 
   // ---------- game frame ----------
   // g: game state; flip: draw from player 2's side (network guest); looks: [look0, look1] (optional).
-  function drawGame(ctx, g, flip, prev, alpha, looks) {
+  function drawGame(ctx, g, flip, prev, alpha, looks, outTicks) {
     const s = flip ? -1 : 1;
     const lerp = (a, b) => (prev && alpha < 1 ? b + (a - b) * (1 - alpha) : b);
     ctx.drawImage(courtCanvas(), 0, 0);
@@ -275,7 +284,7 @@
     for (const i of [far, near]) shadow(ctx, pl[i].q.x, pl[i].q.y, 34 * 0.6 * pl[i].q.per, 14 * 0.6 * pl[i].q.per);
     const drawPl = (i, facing) => drawPlayer(ctx, pl[i].q.x, pl[i].q.y, 0.6 * pl[i].q.per, pl[i].mc.anim, pl[i].mc.af, facing, i, looks && looks[i]);
     drawPl(far, 'front');
-    drawNet(ctx);
+    drawNet(ctx, outTicks ? Math.min(1, outTicks / 30) : 0);
     if (g.bound.alpha > 0) {
       const q = P(g.bound.vx * s, g.bound.vy * s);
       ctx.strokeStyle = 'rgba(255,255,255,' + g.bound.alpha / 100 * 0.8 + ')'; ctx.lineWidth = 1.5;
@@ -295,6 +304,11 @@
       ctx.restore();
     }
     drawPl(near, 'back');
+    for (const i of [far, near]) {
+      const q = pl[i].q, st = Math.max(0, Math.min(100, pl[i].mc.st == null ? 100 : pl[i].mc.st));
+      ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(q.x - 17, q.y + 5, 34, 3);
+      ctx.fillStyle = st < 25 ? '#ed8b52' : '#72d89a'; ctx.fillRect(q.x - 17, q.y + 5, 34 * st / 100, 3);
+    }
   }
 
   // ---------- menu scenery (title / stats / bracket backgrounds) ----------
