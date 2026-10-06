@@ -23,35 +23,46 @@
   }
   addEventListener('resize', resize);
 
-  // ---------- input ----------
-  const KEY_STORAGE = 'tennus.advanced-keys';
-  const defaultAdvanced = { sh: 'Shift', tp: 'z', sl: 'x', lc: 'c' };
-  let advanced;
-  try { advanced = Object.assign({}, defaultAdvanced, JSON.parse(localStorage.getItem(KEY_STORAGE) || '{}')); } catch (e) { advanced = Object.assign({}, defaultAdvanced); }
-  function keyMap() {
-    const out = { ArrowLeft: 'l', ArrowRight: 'r', ArrowUp: 'u', ArrowDown: 'd', ' ': 'sp', Spacebar: 'sp', a: 'a', A: 'a', q: 'p', Q: 'p', e: 'n', E: 'n' };
-    for (const [action, key] of Object.entries(advanced)) { out[key] = action; out[key.toUpperCase()] = action; }
-    return out;
+  // ---------- input: every action can be rebound (Contrôles screen), saved per browser ----------
+  const KEY_STORAGE = 'tennus.keys';
+  const ACTIONS = [
+    ['u', 'Haut'], ['d', 'Bas'], ['l', 'Gauche'], ['r', 'Droite'], ['sp', 'Frapper / servir'],
+    ['sh', 'Sprint'], ['tp', 'Lift'], ['sl', 'Slice'], ['lc', 'Lob / amorti'],
+    ['a', 'Coup spécial'], ['p', 'Carte précédente'], ['n', 'Carte suivante'],
+  ];
+  const PRESETS = {
+    classic: { u: 'ArrowUp', d: 'ArrowDown', l: 'ArrowLeft', r: 'ArrowRight', sp: ' ', sh: 'Shift', tp: 'z', sl: 'x', lc: 'c', a: 'a', p: 'q', n: 'e' },
+    azerty: { u: 'z', d: 's', l: 'q', r: 'd', sp: ' ', sh: 'Shift', tp: 'j', sl: 'k', lc: 'l', a: 'e', p: 'a', n: 'r' },
+  };
+  const norm = (k) => (k.length === 1 ? k.toLowerCase() : k === 'Spacebar' ? ' ' : k);
+  let binds;
+  try {
+    binds = Object.assign({}, PRESETS.classic, JSON.parse(localStorage.getItem(KEY_STORAGE) || '{}'));
+    const old = JSON.parse(localStorage.getItem('tennus.advanced-keys') || 'null');  // first version: 4 advanced keys only
+    if (old && !localStorage.getItem(KEY_STORAGE)) for (const a of ['sh', 'tp', 'sl', 'lc']) if (old[a]) binds[a] = norm(old[a]);
+  } catch (e) { binds = Object.assign({}, PRESETS.classic); }
+  let KEYS = {};
+  function applyBinds() {
+    KEYS = {};
+    for (const [a] of ACTIONS) KEYS[binds[a]] = a;
+    try { localStorage.setItem(KEY_STORAGE, JSON.stringify(binds)); } catch (e) { /* storage unavailable */ }
   }
-  let KEYS = keyMap();
-  function configureKeys() {
-    const raw = prompt('Touches avancées : Sprint, Lift, Slice, Lob/Amorti', [advanced.sh, advanced.tp, advanced.sl, advanced.lc].join(', '));
-    if (raw == null) return;
-    const v = raw.split(',').map((s) => s.trim()).filter(Boolean);
-    if (v.length !== 4 || new Set(v.map((s) => s.toLowerCase())).size !== 4) return alert('Entrez quatre touches différentes, séparées par des virgules.');
-    advanced = { sh: v[0], tp: v[1], sl: v[2], lc: v[3] }; KEYS = keyMap(); localStorage.setItem(KEY_STORAGE, JSON.stringify(advanced));
-  }
+  applyBinds();
+  const KEY_NAMES = { ' ': 'Espace', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', Shift: 'Shift', Control: 'Ctrl', Alt: 'Alt', Enter: 'Entrée', Tab: 'Tab' };
+  const keyLabel = (action) => { const k = binds[action]; return KEY_NAMES[k] || (k.length === 1 ? k.toUpperCase() : k); };
+  let capture = null;  // Contrôles screen waiting for a key: fn(key)
   const keys = {}; let spLatch = false;
   addEventListener('keydown', (e) => {
     A.unlock();
     if (AC.isOpen()) { if (e.key === 'Escape') AC.close(); return; }  // typing in the account box
     if (document.activeElement === addr) { if (e.key === 'Enter') scene.onKey && scene.onKey('Enter'); return; }
-    const k = KEYS[e.key];
+    if (capture) { e.preventDefault(); const f = capture; capture = null; f(e.key); return; }
+    const k = KEYS[norm(e.key)];
     if (k) { e.preventDefault(); if (!keys[k] && k === 'sp') spLatch = true; keys[k] = true; }
     if (!e.repeat && scene.onKey) scene.onKey(e.key);
-    if (e.key === 'm' || e.key === 'M') A.toggleMute();
+    if ((e.key === 'm' || e.key === 'M') && !k) A.toggleMute();
   });
-  addEventListener('keyup', (e) => { const k = KEYS[e.key]; if (k) keys[k] = false; });
+  addEventListener('keyup', (e) => { const k = KEYS[norm(e.key)]; if (k) keys[k] = false; });
   addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
   function readPad() {  // sampled once per tick, like the original keydata[]
     const p = { l: !!keys.l, r: !!keys.r, u: !!keys.u, d: !!keys.d, sp: !!keys.sp || spLatch,
@@ -79,7 +90,7 @@
   function fmtDur(ms) {
     const s = Math.max(0, Math.ceil(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
     if (h >= 48) return Math.floor(h / 24) + ' j ' + (h % 24) + ' h';
-    return h ? h + ' h ' + String(m).padStart(2, '0') : m ? m + ' min ' + String(s % 60).padStart(2, '0') : s + ' s';
+    return h ? h + ' h ' + String(m).padStart(2, '0') : m ? m + ' min' + (s % 60 ? ' ' + String(s % 60).padStart(2, '0') : '') : s + ' s';
   }
   const MT = TennisMeta, CARDS = TennisCards;
   const cardName = (id) => (CARDS.find(id) || { name: id }).name;
@@ -96,8 +107,24 @@
 
   let scene = null;
   const acctBtn = document.getElementById('acct-btn');
+  // Short reward / info banner drawn over any screen.
+  let toastMsg = '', toastT = 0;
+  function toast(msg) { if (msg) { toastMsg = msg; toastT = 150; } }
+  function drawToast() {
+    if (!toastT) return;
+    toastT--;
+    ctx.globalAlpha = Math.min(1, toastT / 20);
+    ctx.font = 'bold 15px ' + R.FONT;
+    const w = Math.min(560, ctx.measureText(toastMsg).width + 40);
+    ctx.fillStyle = 'rgba(20,28,50,0.95)'; R.roundRect(ctx, 300 - w / 2, 8, w, 34, 17); ctx.fill();
+    ctx.strokeStyle = '#7dff8a'; ctx.lineWidth = 2; ctx.stroke();
+    R.text(ctx, toastMsg, 300, 31, 15, { align: 'center', outline: false, color: '#e8ffe9' });
+    ctx.globalAlpha = 1;
+  }
+  const sticker = document.getElementById('zinger');
   function go(s) {
-    scene = s; spLatch = false; addr.style.display = 'none';
+    scene = s; spLatch = false; addr.style.display = 'none'; capture = null;
+    if (sticker) sticker.style.display = s === Title ? '' : 'none';  // never over the HUD or the menus
     acctBtn.style.display = s === Title ? 'block' : 'none';  // account box only from the title screen
     if (s !== Title) AC.close();
     if (s.enter) s.enter();
@@ -112,15 +139,92 @@
     };
   }
 
+  // ---------- controls: click an action, press its new key ----------
+  function Controls() {
+    let waiting = null, status = 'Clique une action puis appuie sur la nouvelle touche.';
+    const rowR = (i) => [70 + (i % 2) * 236, 104 + Math.floor(i / 2) * 52, 224, 44];
+    const BTN = { classic: [70, 430, 224, 34], azerty: [306, 430, 224, 34], back: [230, 548, 140, 30] };
+    function rebind(action, key) {
+      key = norm(key);
+      if (key === 'Escape') { status = 'Annulé.'; waiting = null; return; }
+      const other = ACTIONS.find(([a]) => a !== action && binds[a] === key);
+      if (other) binds[other[0]] = binds[action];  // swap: no key ever does two things
+      binds[action] = key; applyBinds(); waiting = null;
+      status = other ? 'Échangée avec « ' + other[1] + ' ».' : 'Touche enregistrée.';
+    }
+    return {
+      tick() {},
+      draw() {
+        R.drawScene(ctx); R.panel(ctx);
+        R.text(ctx, 'CONTRÔLES', 300, 66, 30, { align: 'center', outline: false });
+        R.text(ctx, 'Débutant : flèches + Espace suffisent. Le reste est optionnel.', 300, 90, 12, { align: 'center', outline: false, color: '#ccd8ea' });
+        ACTIONS.forEach(([a, name], i) => {
+          const r = rowR(i), on = waiting === a, hot = inRect(mx, my, r);
+          ctx.fillStyle = on ? 'rgba(255,210,58,0.3)' : hot ? 'rgba(255,255,255,0.14)' : 'rgba(7,13,30,0.8)';
+          R.roundRect(ctx, r[0], r[1], r[2], r[3], 9); ctx.fill();
+          R.text(ctx, name, r[0] + 14, r[1] + 27, 14, { outline: false });
+          const kr = [r[0] + r[2] - 88, r[1] + 8, 78, 28];
+          ctx.fillStyle = on ? '#ffd23a' : '#f2f2f2'; R.roundRect(ctx, kr[0], kr[1], kr[2], kr[3], 6); ctx.fill();
+          R.text(ctx, on ? '...' : keyLabel(a), kr[0] + 39, kr[1] + 19, 13, { align: 'center', outline: false, color: '#19130a' });
+        });
+        button(BTN.classic, 'PRÉRÉGLAGE FLÈCHES', { size: 12 });
+        button(BTN.azerty, 'PRÉRÉGLAGE ZQSD (AZERTY)', { size: 12 });
+        R.text(ctx, waiting ? 'Appuie sur une touche (Échap : annuler)' : status, 300, 500, 14, { align: 'center', outline: false, color: '#9ad0ff' });
+        R.text(ctx, 'M : couper le son', 300, 522, 11, { align: 'center', outline: false, color: '#9aa6bb' });
+        button(BTN.back, 'RETOUR', { size: 14 });
+      },
+      onClick(x, y) {
+        if (inRect(x, y, BTN.back)) return go(Title);
+        for (const p of ['classic', 'azerty']) if (inRect(x, y, BTN[p])) { binds = Object.assign({}, PRESETS[p]); applyBinds(); status = 'Préréglage appliqué.'; return; }
+        const i = ACTIONS.findIndex((_, j) => inRect(x, y, rowR(j)));
+        if (i >= 0) { waiting = ACTIONS[i][0]; const a = waiting; capture = (key) => rebind(a, key); }
+      },
+      onKey(k) { if (k === 'Escape' && !waiting) go(Title); },
+    };
+  }
+
   // ---------- title ----------
-  const MENU = [['PARTIE RAPIDE', 'Classé · trophées, coffres et pièces', 300], ['TOURNOI', '16 joueurs, élimination directe', 362],
-    ['HÉBERGER / REJOINDRE', 'Joue avec un ami via un code', 424], ['CLASSEMENT', 'Trophées, semaine et clubs', 486]];
-  const MENU_X = 140, MENU_W = 320, MENU_H = 52;
+  const MENU = [['PARTIE RAPIDE', 'Classé · trophées, coffres et pièces', 306], ['TOURNOI', '16 joueurs contre l’ordinateur', 362],
+    ['HÉBERGER / REJOINDRE', 'Joue avec un ami via un code', 418], ['CLASSEMENT', 'Trophées, semaine et clubs', 474]];
+  const MENU_X = 140, MENU_W = 320, MENU_H = 48;
+  const CONTROLS_BTN = [12, 12, 112, 28], GOAL = [27, 198, 546, 50];
   const menuRect = (y) => [MENU_X, y, MENU_W, MENU_H];
   // Top navigation: shop and the meta-game hub tabs.
   const NAV = [['BOUTIQUE', 'shop'], ['COFFRES', 'chests'], ['QUÊTES', 'quests'], ['DECK', 'deck'], ['PASS', 'pass'], ['CLUB', 'club']]
-    .map(([label, tab], i) => ({ label, tab, r: [27 + i * 92, 204, 86, 34] }));
-  const EVENT_BTN = [140, 250, 320, 40];
+    .map(([label, tab], i) => ({ label, tab, r: [27 + i * 92, 154, 86, 34] }));
+  const EVENT_BTN = [140, 256, 320, 34];
+  // "Next goal" strip: arena progress, chest slots, quests — the reasons to play one more match.
+  function drawGoal() {
+    const p = AC.profile, m = AC.metaState, r = GOAL, hot = inRect(mx, my, r);
+    ctx.fillStyle = hot ? 'rgba(255,255,255,0.16)' : 'rgba(7,13,30,0.62)'; R.roundRect(ctx, r[0], r[1], r[2], r[3], 12); ctx.fill();
+    ctx.strokeStyle = 'rgba(212,255,58,0.35)'; ctx.lineWidth = 1.2; ctx.stroke();
+    if (!p) {
+      R.text(ctx, 'Connecte-toi : coffres, cartes, arènes et pass de saison', 300, 220, 14, { align: 'center', outline: false });
+      R.text(ctx, 'Clique ici pour te connecter avec Google', 300, 238, 11, { align: 'center', outline: false, weight: 'normal', color: '#9ad0ff' });
+      return;
+    }
+    const ai = MT.arena(p.trophies), next = MT.ARENAS[ai + 1];
+    R.text(ctx, MT.ARENAS[ai].name.toUpperCase(), 42, 216, 12, { outline: false, color: '#d4ff3a' });
+    const f = next ? (p.trophies - MT.ARENAS[ai].min) / (next.min - MT.ARENAS[ai].min) : 1;
+    ctx.fillStyle = 'rgba(255,255,255,0.15)'; R.roundRect(ctx, 42, 224, 200, 9, 4); ctx.fill();
+    ctx.fillStyle = '#ffd23a'; R.roundRect(ctx, 42, 224, Math.max(9, 200 * f), 9, 4); ctx.fill();
+    R.text(ctx, next ? '🏆 ' + p.trophies + ' / ' + next.min + ' → ' + next.name : '🏆 ' + p.trophies + ' · arène max', 42, 244, 10, { outline: false, weight: 'normal', color: '#ccd8ea' });
+    if (!m) return;
+    R.text(ctx, 'COFFRES', 300, 216, 11, { align: 'center', outline: false, color: '#9ad0ff' });
+    for (let i = 0; i < MT.CHEST_SLOTS; i++) {
+      const c = m.chests[i], x = 252 + i * 25;
+      ctx.fillStyle = !c ? 'rgba(255,255,255,0.1)' : c.kind === 'gold' ? '#ffd23a' : c.kind === 'silver' ? '#cfd8e6' : '#b07a43';
+      R.roundRect(ctx, x, 224, 20, 16, 4); ctx.fill();
+      if (c && c.opensAt && c.opensAt <= Date.now()) { ctx.strokeStyle = '#7dff8a'; ctx.lineWidth = 2; ctx.stroke(); }
+    }
+    const qDone = m.quests.filter((q) => q.progress >= q.goal).length;
+    R.text(ctx, 'QUÊTES ' + qDone + '/3', 500, 216, 11, { align: 'center', outline: false, color: '#9ad0ff' });
+    m.quests.forEach((q, i) => {
+      ctx.fillStyle = 'rgba(255,255,255,0.15)'; R.roundRect(ctx, 446 + i * 38, 226, 32, 7, 3); ctx.fill();
+      ctx.fillStyle = q.claimed ? '#5cbd87' : '#7dff8a'; R.roundRect(ctx, 446 + i * 38, 226, Math.max(7, 32 * Math.min(1, q.progress / q.goal)), 7, 3); ctx.fill();
+    });
+    R.text(ctx, m.login.claimed ? 'Bonus du jour reçu' : '🎁 Bonus du jour à prendre !', 500, 246, 10, { align: 'center', outline: false, weight: 'normal', color: m.login.claimed ? '#9aa6bb' : '#ffd23a' });
+  }
   const TUTO_KEY = 'tennus.tutorial-done';
   const tutoDone = () => { try { return !!localStorage.getItem(TUTO_KEY); } catch (e) { return true; } };
   function badges() {  // tab -> something to claim
@@ -143,7 +247,9 @@
     tick() {},
     draw() {
       R.drawTitleScene(ctx, performance.now() / 1000);
-      R.drawLogo(ctx, 'TENNUS', 300, 150);
+      R.drawLogo(ctx, 'TENNUS', 300, 118);
+      button(CONTROLS_BTN, '⌨ CONTRÔLES', { size: 11, bg: 'rgba(255,255,255,0.85)' });
+      drawGoal();
       const b = badges();
       for (const n of NAV) {
         button(n.r, n.label, { size: 12, bg: n.tab === 'shop' ? 'rgba(255,210,58,0.9)' : 'rgba(255,255,255,0.88)' });
@@ -157,10 +263,13 @@
         + (p.points ? '   ·   ' + p.points + ' point(s) à placer !' : '')
         : 'Invité : connectez-vous pour gagner trophées, coffres et récompenses', 300, 566, 12,
         { align: 'center', outline: false, color: p && p.points ? '#d4ff3a' : 'rgba(220,235,255,0.85)' });
-      R.text(ctx, 'Espace : frapper · Flèches : bouger · Shift sprint · Z/X/C effets · A spécial · K touches · T tutoriel', 300, 590, 10,
+      R.text(ctx, keyLabel('sp') + ' : frapper · ' + [keyLabel('u'), keyLabel('l'), keyLabel('d'), keyLabel('r')].join('') + ' : bouger · '
+        + keyLabel('sh') + ' : sprint · ' + keyLabel('a') + ' : spécial · T : tutoriel', 300, 590, 10,
         { align: 'center', outline: false, weight: 'normal', color: 'rgba(220,235,255,0.7)' });
     },
     onClick(x, y) {
+      if (inRect(x, y, CONTROLS_BTN)) return go(Controls());
+      if (inRect(x, y, GOAL)) { A.play('click'); return AC.profile ? go(Hub('chests')) : AC.open(); }
       const n = NAV.find((it) => inRect(x, y, it.r));
       if (n) { A.play('click'); return go(n.tab === 'shop' ? Shop() : Hub(n.tab)); }
       const ev = AC.metaState && AC.metaState.event;
@@ -174,7 +283,7 @@
       else go(Leaderboard());
     },
     onKey(k) {
-      if (k === 'k' || k === 'K') configureKeys();
+      if (k === 'k' || k === 'K') go(Controls());
       if (k === 't' || k === 'T') go(Tutorial());
     },
   };
@@ -291,7 +400,7 @@
     async function act(action, extra, ok) {
       if (busy) return;
       busy = true; status = '';
-      try { const j = await AC.act(action, extra); status = ok ? ok(j) : ''; } catch (e) { status = e.message; }
+      try { const j = await AC.act(action, extra); status = ''; toast(ok ? ok(j) : 'C’est fait !'); A.play('click'); } catch (e) { status = e.message; }
       busy = false;
     }
     const sub = (s, x, y, size, color, align) => R.text(ctx, s, x, y, size || 12, { align: align || 'left', outline: false, color: color || '#ccd8ea' });
@@ -545,8 +654,11 @@
         }
         const m = AC.metaState;
         if (needLogin || !AC.profile) {
-          sub('Connecte-toi pour gagner coffres, cartes, quêtes et récompenses de saison.', 300, 260, 14, '#fff', 'center');
-          const lr = [220, 290, 160, 34];
+          sub('Avec un compte (gratuit, Google) :', 300, 150, 16, '#ffd23a', 'center');
+          ['🎁 un coffre à chaque victoire, plein de pièces et de cartes', '⚡ 8 coups spéciaux à collectionner et améliorer',
+            '🏆 5 arènes, des terrains et personnages à débloquer', '📅 quêtes du jour, bonus de connexion et pass de saison',
+            '👥 clubs : discute et échange des cartes'].forEach((l, i) => sub(l, 300, 190 + i * 26, 13, '#fff', 'center'));
+          const lr = [220, 330, 160, 34];
           button(lr, 'SE CONNECTER', { bg: '#7dff8a' });
           area(lr, () => AC.open());
           if (AC.profile) { needLogin = false; AC.meta().catch(() => {}); }
@@ -693,7 +805,7 @@
   // ---------- match drawing shared by solo and network ----------
   function drawMatch(g, flip, prev, alpha, meIdx, looks, outTicks) {
     R.drawGame(ctx, g, flip, prev, alpha, looks, outTicks);
-    R.text(ctx, g.score_txt, 8, 590, 18);
+    R.text(ctx, g.score_txt, 300, 26, 17, { align: 'center' });
     drawDeckHud(g, meIdx);
     // quit button
     ctx.fillStyle = 'rgba(255,255,255,0.85)'; R.roundRect(ctx, 576, 6, 19, 19, 3); ctx.fill();
@@ -715,29 +827,40 @@
     if (g.space.on) R.spaceButton(ctx, 300, 330, g.space.f);
   }
   const QUIT = [572, 2, 28, 28];
-  // Energy (10 pips) and the 3 specials of my deck: active one framed, unaffordable or cooling down dimmed.
+  // Energy (10 pips) and the 3 specials of my deck with their keys; active one framed,
+  // unaffordable or cooling down dimmed. Newcomers also get a one-line hint.
   function drawDeckHud(g, meIdx) {
-    const deck = g.deck && g.deck[meIdx];
-    if (!deck || !deck.length) return;
-    const me = g.P[meIdx];
-    for (let i = 0; i < 10; i++) {
-      ctx.fillStyle = i < me.en ? '#c58cff' : 'rgba(0,0,0,0.45)';
-      R.roundRect(ctx, 196 + i * 21, 540, 18, 7, 3); ctx.fill();
-    }
-    for (let i = 0; i < deck.length; i++) {
-      const c = CARDS.find(deck[i]), x = 196 + i * 72, active = i === me.card;
-      const ready = active ? !me.cd && me.en >= c.cost : me.en >= c.cost;
-      ctx.fillStyle = active ? 'rgba(255,210,58,0.9)' : 'rgba(0,0,0,0.55)';
-      R.roundRect(ctx, x, 551, 66, 26, 5); ctx.fill();
-      ctx.globalAlpha = ready ? 1 : 0.45;
-      R.text(ctx, c.name, x + 33, 563, 9, { align: 'center', outline: false, color: active ? '#19130a' : '#fff' });
-      R.text(ctx, c.cost + ' ⚡' + (active ? '  [A]' : ''), x + 33, 574, 9, { align: 'center', outline: false, weight: 'normal', color: active ? '#19130a' : '#c9b6ff' });
-      ctx.globalAlpha = 1;
-      if (active && me.cd) {
-        const f = me.cd / c.cooldown;
-        ctx.fillStyle = 'rgba(0,0,0,0.45)'; R.roundRect(ctx, x, 551, 66 * f, 26, 5); ctx.fill();
+    const deck = g.deck && g.deck[meIdx], me = g.P[meIdx];
+    if (deck && deck.length) {
+      for (let i = 0; i < 10; i++) {
+        ctx.fillStyle = i < me.en ? '#c58cff' : 'rgba(0,0,0,0.45)';
+        R.roundRect(ctx, 166 + i * 27, 528, 24, 7, 3); ctx.fill();
       }
+      R.text(ctx, '⚡ ' + me.en, 156, 535, 11, { align: 'right', outline: false, color: '#c9b6ff' });
+      for (let i = 0; i < deck.length; i++) {
+        const c = CARDS.find(deck[i]), x = 166 + i * 92, active = i === me.card;
+        const ready = me.en >= c.cost && !(active && me.cd);
+        ctx.fillStyle = active ? 'rgba(255,210,58,0.92)' : 'rgba(0,0,0,0.6)';
+        R.roundRect(ctx, x, 541, 86, 40, 7); ctx.fill();
+        if (active && ready) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+        ctx.globalAlpha = ready ? 1 : 0.5;
+        R.text(ctx, c.name, x + 43, 557, 11, { align: 'center', outline: false, color: active ? '#19130a' : '#fff' });
+        R.text(ctx, c.cost + ' ⚡' + (active ? '   touche ' + keyLabel('a') : ''), x + 43, 573, 10, { align: 'center', outline: false, weight: 'normal', color: active ? '#19130a' : '#c9b6ff' });
+        ctx.globalAlpha = 1;
+        if (active && me.cd) {
+          ctx.fillStyle = 'rgba(0,0,0,0.5)'; R.roundRect(ctx, x, 541, 86 * me.cd / c.cooldown, 40, 7); ctx.fill();
+        }
+      }
+      R.text(ctx, keyLabel('p') + ' ◀', 160, 566, 11, { align: 'right', outline: false, color: '#ccd8ea' });
+      R.text(ctx, '▶ ' + keyLabel('n'), 444, 566, 11, { outline: false, color: '#ccd8ea' });
     }
+    const p = AC.profile;
+    if (p && p.played >= 5) return;  // hints for the first matches only
+    let tip = '';
+    if (me.st < 25) tip = 'Fatigué : relâche ' + keyLabel('sh') + ' pour récupérer de la stamina';
+    else if (deck && deck.length && !me.cd && me.en >= CARDS.find(deck[me.card]).cost) tip = '⚡ Coup spécial prêt : appuie sur ' + keyLabel('a');
+    else if (g.P[meIdx].stat === C.PS_SERVE) tip = keyLabel('sp') + ' pour servir · ' + keyLabel('l') + ' / ' + keyLabel('r') + ' en frappant pour viser';
+    if (tip) R.text(ctx, tip, 300, 516, 13, { align: 'center', color: '#fff' });
   }
 
   // copy of the moving parts, for render interpolation between ticks
@@ -774,12 +897,12 @@
     const G = L.createMatch({ names: ['VOUS', 'COACH'], data: [[5, 5, 6, 6, 0, 0], [3, 3, 3, 3, 3, 0]], ctrl: ['human', 'ai'], seed: 7 });
     G.P[0].en = 6;  // enough energy to try a special right away
     const STEPS = [
-      { text: 'Flèches : déplace-toi sur le court', done: (c) => c.moved > 25 },
-      { text: 'Espace : sers, puis frappe quand la balle arrive', done: (c) => c.hits >= 2 },
-      { text: 'Garde une flèche enfoncée en frappant pour viser', done: (c) => c.aimed >= 1 },
-      { text: 'Shift : sprint (la jauge verte de stamina baisse)', done: (c) => c.sprint > 20 },
-      { text: 'Z lift · X slice · C lob ou amorti, en frappant', done: (c) => c.effects >= 1 },
-      { text: 'A : coup spécial (coûte de l’énergie, barre violette)', done: (c) => c.cards >= 1 },
+      { text: () => [keyLabel('u'), keyLabel('l'), keyLabel('d'), keyLabel('r')].join(' ') + ' : déplace-toi sur le court', done: (c) => c.moved > 25 },
+      { text: () => keyLabel('sp') + ' : sers, puis frappe quand la balle arrive', done: (c) => c.hits >= 2 },
+      { text: () => 'Garde une direction enfoncée en frappant pour viser', done: (c) => c.aimed >= 1 },
+      { text: () => keyLabel('sh') + ' : sprint (la jauge verte de stamina baisse)', done: (c) => c.sprint > 20 },
+      { text: () => keyLabel('tp') + ' lift · ' + keyLabel('sl') + ' slice · ' + keyLabel('lc') + ' lob ou amorti, en frappant', done: (c) => c.effects >= 1 },
+      { text: () => keyLabel('a') + ' : coup spécial (coûte de l’énergie, barre violette)', done: (c) => c.cards >= 1 },
     ];
     const c = { moved: 0, hits: 0, aimed: 0, sprint: 0, effects: 0, cards: 0 };
     let step = 0, doneT = 0, prev = null, outTicks = 0;
@@ -807,8 +930,8 @@
         drawMatch(G, false, prev, alpha, 0, [resolveCourt(AC.look(), AC.profile && AC.profile.trophies), null], outTicks);
         ctx.fillStyle = 'rgba(0,0,0,0.7)'; R.roundRect(ctx, 60, 40, 480, 64, 12); ctx.fill();
         R.text(ctx, step < STEPS.length ? 'ÉTAPE ' + (step + 1) + '/' + STEPS.length : 'BRAVO !', 300, 62, 13, { align: 'center', outline: false, color: '#ffd23a' });
-        R.text(ctx, step < STEPS.length ? STEPS[step].text : 'Tu connais toutes les commandes. À toi de jouer !', 300, 88, 17, { align: 'center', outline: false });
-        R.text(ctx, 'Échap : passer le tutoriel', 300, 122, 11, { align: 'center', outline: false, color: 'rgba(255,255,255,0.7)' });
+        R.text(ctx, step < STEPS.length ? STEPS[step].text() : 'Tu connais toutes les commandes. À toi de jouer !', 300, 88, 17, { align: 'center', outline: false });
+        R.text(ctx, 'Échap : passer le tutoriel · touches modifiables dans Contrôles (K)', 300, 122, 11, { align: 'center', outline: false, color: 'rgba(255,255,255,0.7)' });
       },
       onClick(x, y) { if (inRect(x, y, QUIT)) finish(); },
       onKey(k) { if (k === 'Escape') finish(); },
@@ -841,6 +964,16 @@
     try { history.replaceState(null, '', location.pathname); } catch (e) { /* file:// */ }
   }
   const shareLink = (code) => location.origin + location.pathname + '#' + code;
+
+  const TIPS = () => [
+    'le lob (' + keyLabel('lc') + ') punit un adversaire collé au filet',
+    'l’amorti (' + keyLabel('lc') + ' loin du filet) surprend un joueur en fond de court',
+    'garde de la stamina : sous 25 %, tu cours et vises moins bien',
+    'chaque frappe recharge ton énergie pour les coups spéciaux',
+    'une victoire classée = un coffre (si un emplacement est libre)',
+    'les quêtes du jour rapportent des pièces et de l’XP de pass',
+    'change de carte active avec ' + keyLabel('p') + ' et ' + keyLabel('n'),
+  ];
 
   // ---------- online lobby ----------
   // opts.quick: ranked matchmaking right away; otherwise host / join a private room (opts.code: invite link).
@@ -898,6 +1031,8 @@
           const p = AC.profile;
           R.text(ctx, "Recherche d'un adversaire...", 300, 230, 24, { align: 'center', outline: false });
           R.text(ctx, Math.floor((performance.now() - searchT0) / 1000) + ' s', 300, 275, 30, { align: 'center', outline: false, color: '#ffd23a' });
+          const tip = TIPS()[Math.floor((performance.now() - searchT0) / 4000) % TIPS().length];
+          R.text(ctx, 'Astuce : ' + tip, 300, 400, 13, { align: 'center', outline: false, weight: 'normal', color: '#d4ff3a' });
           R.text(ctx, event ? event.desc + ' · +' + MT.EVENT_COINS + ' pièces par victoire, sans trophées'
             : p ? 'Partie classée : 🏆 ' + p.trophies + ' · +' + MT.TROPHY_WIN + ' / -' + MT.TROPHY_LOSS + ' trophées, coffre à la victoire'
               : "En invité, rien n'est enregistré : connectez-vous pour progresser.", 300, 330, 13, { align: 'center', outline: false, color: '#ccc' });
@@ -942,7 +1077,7 @@
 
   // ---------- online match ----------
   function startNet() {
-    let prev = null, intro = 75, wasOver = false, levelUp = 0, outTicks = 0;  // "VS" banner for the first 2.5 s
+    let prev = null, intro = 75, wasOver = false, levelUp = 0, outTicks = 0, seenResult = null;  // "VS" banner for the first 2.5 s
     sess.onEvents = (ev) => ev.forEach((e) => { A.play(e); if (e === 'out') outTicks = 30; });
     sess.onProfile = (p) => { const old = AC.profile; if (old && p.level > old.level) levelUp = p.level; AC.update(p); };
     let confirmQuit = 0;  // confirm ranked departure; server cancels if no movement or hit occurred
@@ -961,6 +1096,12 @@
         wasOver = over;
         if (confirmQuit) confirmQuit--;
         if (outTicks) outTicks--;
+        if (sess.result && sess.result !== seenResult) {
+          seenResult = sess.result;
+          if (AC.profile) AC.meta().catch(() => {});
+          if (sess.result.arena) toast('Nouvelle arène débloquée : ' + sess.result.arena + ' !');
+          else if (sess.result.chest) toast(sess.result.chest + ' ajouté à tes coffres !');
+        }
       },
       tickScale: () => sess.tickScale,
       draw(alpha) {
@@ -985,7 +1126,7 @@
         if (sess.closed) msg = sess.cancelled ? 'Partie annulée — aucun Elo, XP ni pièces.' : "L'adversaire a quitté la partie" + (sess.result ? ' : victoire !' : '');
         else if (sess.lost) msg = 'Connexion perdue - reconnexion...';
         else if (sess.paused) msg = sess.peerOn ? 'Pause - en attente...' : 'Adversaire déconnecté - pause';
-        if (msg) {
+        if (msg && !g.over) {
           ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 270, 600, 70);
           R.text(ctx, msg, 300, 302, 24, { align: 'center' });
           R.text(ctx, 'Échap : menu', 300, 328, 15, { align: 'center' });
@@ -995,25 +1136,43 @@
           R.text(ctx, 'Sans mouvement ni frappe : annulée. Sinon : défaite.', 300, 376, 18, { align: 'center' });
           R.text(ctx, 'Échap à nouveau pour confirmer', 300, 400, 15, { align: 'center' });
         }
-        if (g.over) {
-          R.text(ctx, 'Espace : revanche   -   Échap : menu', 300, 380, 18, { align: 'center' });
-          const r = sess.result;
-          if (r) {
-            const parts = [];
-            if (r.trophies) parts.push((r.trophies > 0 ? '+' : '') + r.trophies + ' 🏆');
-            if (r.xp) parts.push('+' + r.xp + ' XP');
-            parts.push('+' + (r.coins || 0) + ' pièces');
-            R.text(ctx, parts.join('   ·   '), 300, 420, 18, { align: 'center', color: r.won ? '#7dff8a' : '#ff8a80' });
-            const extra = [r.chest && r.chest + ' obtenu !', r.arena && 'Nouvelle arène : ' + r.arena + ' !'].filter(Boolean).join('   ');
-            if (extra) R.text(ctx, extra, 300, 476, 16, { align: 'center', color: '#ffd23a' });
-          }
-          if (levelUp) R.text(ctx, 'NIVEAU ' + levelUp + ' ! Un point de capacité à placer (compte)', 300, 452, 16, { align: 'center', color: '#ffd23a' });
-        }
+        if (g.over) drawResult(g);
       },
-      onClick(x, y) { if (inRect(x, y, QUIT)) leave(); },
+      onClick(x, y) {
+        if (inRect(x, y, QUIT)) return leave();
+        const g = sess.view;
+        if (!g || !g.over) return;
+        if (inRect(x, y, RES.again)) { const q = sess.isPublic, ev = sess.consts && sess.consts.ev; sess.onEvents = null; netOff(); return go(q ? Lobby({ quick: true, event: ev ? MT.EVENTS.find((e) => e.id === ev) : null }) : Lobby({})); }
+        if (inRect(x, y, RES.rematch)) { spLatch = true; return; }
+        if (inRect(x, y, RES.menu)) { sess.onEvents = null; netOff(); go(Title); }
+      },
       onKey(k) { if (k === 'Escape') leave(); },
     });
+    // End of match: big result, rewards, and one click to play again.
+    function drawResult(g) {
+      const r = sess.result, won = r ? r.won : g.match_winner === sess.me;
+      ctx.fillStyle = 'rgba(5,10,25,0.78)'; R.roundRect(ctx, 90, 300, 420, 196, 16); ctx.fill();
+      R.text(ctx, won ? 'VICTOIRE !' : 'DÉFAITE', 300, 340, 30, { align: 'center', color: won ? '#ffd23a' : '#9ad0ff' });
+      if (r) {
+        const parts = [];
+        if (r.trophies) parts.push((r.trophies > 0 ? '+' : '') + r.trophies + ' 🏆');
+        if (r.xp) parts.push('+' + r.xp + ' XP');
+        parts.push('+' + (r.coins || 0) + ' pièces');
+        R.text(ctx, parts.join('   ·   '), 300, 370, 17, { align: 'center', color: won ? '#7dff8a' : '#ffb0a8' });
+        const extra = [r.chest && '🎁 ' + r.chest, r.arena && '🏟 Nouvelle arène : ' + r.arena, levelUp && '⭐ Niveau ' + levelUp].filter(Boolean).join('   ');
+        if (extra) R.text(ctx, extra, 300, 396, 14, { align: 'center', color: '#ffd23a' });
+        const m = AC.metaState;
+        if (m) {
+          const open = m.quests.filter((q) => !q.claimed && q.progress < q.goal)[0];
+          if (open) R.text(ctx, 'Quête : ' + open.text + ' (' + open.progress + '/' + open.goal + ')', 300, 418, 12, { align: 'center', outline: false, color: '#ccd8ea' });
+        }
+      } else if (!sess.isPublic) R.text(ctx, 'Partie amicale : rien n’est enregistré', 300, 380, 14, { align: 'center', outline: false, color: '#ccd8ea' });
+      button(RES.again, sess.isPublic ? 'REJOUER' : 'NOUVELLE PARTIE', { bg: '#7dff8a', size: 14 });
+      if (!sess.closed) button(RES.rematch, 'REVANCHE (' + keyLabel('sp') + ')', { size: 12 });
+      button(RES.menu, 'MENU', { size: 12 });
+    }
   }
+  const RES = { again: [110, 440, 150, 38], rematch: [270, 440, 140, 38], menu: [420, 440, 70, 38] };
 
   // ---------- fixed-step loop, decoupled render ----------
   let last = performance.now(), acc = 0;
@@ -1023,6 +1182,7 @@
     while (acc >= tick) { scene.tick(); acc -= tick; }
     ctx.clearRect(0, 0, 600, 600);
     scene.draw(acc / tick);
+    drawToast();
     requestAnimationFrame(frame);
   }
   resize();
